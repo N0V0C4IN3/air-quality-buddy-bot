@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: airqualitydb
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "57432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d airqualitydb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  sensor-reader:
+    build:
+      context: .
+      dockerfile: sensor-reader/Dockerfile
+      args:
+        TTY_GID: "20"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    devices:
+      - "/dev/ttyUSB0:/dev/ttyUSB0"   # map host device into container
+    privileged: true
+
+  reporter-bot:
+    build:
+      context: .
+      dockerfile: reporter-bot/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+
+volumes:
+  pgdata:
