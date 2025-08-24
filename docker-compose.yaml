@@ -27,7 +27,7 @@ services:
     env_file:
       - .env
     devices:
-      - "/dev/ttyUSB0:/dev/ttyUSB0"   # map host device into container
+       - "/dev/ttyUSB0:/dev/ttyUSB0"   # map host device into container
     privileged: true
 
   reporter-bot:
@@ -39,6 +39,17 @@ services:
         condition: service_healthy
     env_file:
       - .env
+
+  housekeeper:
+    build:
+      context: .
+      dockerfile: housekeeper/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    restart: unless-stopped
 
 volumes:
   pgdata:

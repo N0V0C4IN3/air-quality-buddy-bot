@@ -6,9 +6,10 @@ import pandas as pd
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from markup import main_menu_markup
+from html_helpers import *
 
 UTC = timezone.utc
-bot = Bot(token=settings.telegram_token)
+bot = Bot(token=settings.telegram_token, parse_mode="HTML")
 dp = Dispatcher(bot)
 
 SUBSCRIBERS: set[int] = set()
@@ -36,15 +37,21 @@ async def get_data_and_create_chart(start, end, title, message: types.Message):
     if df.empty:
         await message.answer("No data for today.")
         return
-    stats = df.agg({"pm25": ["min", "mean", "max"], "pm10": ["min", "mean", "max"]}).round(1)
-    msg = f"{title}\nPM2.5 min/avg/max: {stats.loc['min','pm25']}/{stats.loc['mean','pm25']}/{stats.loc['max','pm25']}\n"
-    msg+= f"PM10  min/avg/max: {stats.loc['min','pm10']}/{stats.loc['mean','pm10']}/{stats.loc['max','pm10']}\nCount: {len(df)}"
-    await message.answer(msg)
+
+    stats = df.agg({"pm25": ["min","mean","max"], "pm10": ["min","mean","max"]}).round(1)
+    msg = make_stats_table(
+        stats.loc["min","pm25"], stats.loc["mean","pm25"], stats.loc["max","pm25"],
+        stats.loc["min","pm10"], stats.loc["mean","pm10"], stats.loc["max","pm10"],
+        len(df),
+        title=title
+    )
+    await message.answer(msg, reply_markup=main_menu_markup(message.chat.id in SUBSCRIBERS), disable_web_page_preview=True)
+
     bio = df_to_line_chart_png(df, title=title)
     bio.name = f"{title}.png"
     await message.answer_photo(photo=bio)
 
-# /start shows menu
+# start shows menu
 @dp.message_handler(commands=["start"])
 async def start_cmd(message: types.Message):
     chat_id = message.chat.id
@@ -58,11 +65,10 @@ async def status_handler(message: types.Message):
     if not r:
         await message.answer("No readings yet.")
         return
-    tag = classify(r.pm25, r.pm10)
     await message.answer(
-        f"Latest:\nPM2.5={r.pm25:.1f} µg/m³, PM10={r.pm10:.1f} µg/m³\n"
-        f"Status: {tag}\nAt: {r.timestamp.isoformat()}",
+        format_status_block(r.pm25, r.pm10, r.timestamp),
         reply_markup=main_menu_markup(message.chat.id in SUBSCRIBERS),
+        disable_web_page_preview=True,
     )
     
 # 📅 Today
@@ -98,6 +104,14 @@ async def toggle_sub_handler(message: types.Message):
     else:
         SUBSCRIBERS.add(chat_id)
         await message.answer("🔔 Subscribed to alerts.", reply_markup=main_menu_markup(True))
+
+@dp.message_handler(lambda m: m.text in ["ℹ️ Info", "Info"])
+async def info_handler(message: types.Message):
+    await message.answer(
+        info_text(),
+        reply_markup=main_menu_markup(message.chat.id in SUBSCRIBERS),
+        disable_web_page_preview=True,
+    )
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)

@@ -20,4 +20,8 @@ class Settings:
     alert_cooldown_seconds: int = int(os.getenv("ALERT_COOLDOWN_SECONDS", "1800"))  # 30 min
     enable_alerts: bool = _bool(os.getenv("ENABLE_ALERTS"), True)
 
+    sds011_query_mode: bool = bool(int(os.getenv("SDS011_QUERY_MODE", "1")))          # 1=query mode
+    sds011_sleep_between_reads: bool = bool(int(os.getenv("SDS011_SLEEP_BETWEEN", "1")))
+    sds011_warmup_seconds: int = int(os.getenv("SDS011_WARMUP_SECONDS", "25"))
+
 settings = Settings()

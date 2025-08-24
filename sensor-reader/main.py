@@ -25,9 +25,7 @@ signal.signal(signal.SIGTERM, _handle_stop)
 
 
 def classify_status(pm25: float, pm10: float) -> str:
-    """
-    Trivial classifier; tune to your needs.
-    """
+    """Trivial classifier; tune to your needs."""
     if pm25 >= settings.pm25_err or pm10 >= settings.pm10_err:
         return "err"
     if pm25 >= settings.pm25_warn or pm10 >= settings.pm10_warn:
@@ -36,9 +34,7 @@ def classify_status(pm25: float, pm10: float) -> str:
 
 
 def validate(pm25: float, pm10: float) -> tuple[float, float]:
-    """
-    Clamp negative/NaN/inf; SDS011 shouldn’t produce negatives but be defensive.
-    """
+    """Clamp negative/NaN/inf; SDS011 shouldn’t produce negatives but be defensive."""
     def _clean(x: float) -> float:
         if x != x:  # NaN
             return 0.0
@@ -55,13 +51,20 @@ def main():
     db = Database(url=settings.database_url, echo=False)
     db.create_all()
 
-    sensor = SensorReader()
+    # SensorReader now performs: wake -> warm up -> read -> sleep inside each read()
+    sensor = SensorReader(
+        warmup_seconds=settings.sds011_warmup_seconds,
+        read_timeout_s=settings.sds011_read_timeout_s,
+        retries=settings.sds011_retries,
+        persist_cfg=settings.sds011_persist_cfg,  # set True if you want EEPROM persistence
+    )
 
     interval = max(1, settings.interval_seconds)
 
     while not _stop:
+        loop_start = time.monotonic()
         try:
-            pm25, pm10 = sensor.read()
+            pm25, pm10 = sensor.read()  # wakes -> warms -> reads -> sleeps
             pm25, pm10 = validate(pm25, pm10)
             status = classify_status(pm25, pm10)
             now = datetime.now(timezone.utc)
@@ -76,13 +79,15 @@ def main():
         except Exception as e:
             log.exception("Failed to read/store sensor data: %s", e)
 
-        # sleep with fast shutdown
-        for _ in range(interval):
-            if _stop:
-                break
-            time.sleep(1)
+        # Periodic sleep: aim for 'interval' seconds between cycle starts
+        elapsed = time.monotonic() - loop_start
+        remaining = max(0.0, interval - elapsed)
+        end_time = time.monotonic() + remaining
+        while not _stop and time.monotonic() < end_time:
+            time.sleep(0.2)
 
     log.info("Sensor-reader stopped gracefully.")
+    return 0
 
 
 if __name__ == "__main__":

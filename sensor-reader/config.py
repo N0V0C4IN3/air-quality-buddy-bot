@@ -3,7 +3,7 @@ import os
 from dataclasses import dataclass
 from datetime import timedelta
 
-def _bool(val: str | None, default: bool) -> bool:
+def _get_bool(val: str | None, default: bool) -> bool:
     if val is None:
         return default
     return val.lower() in ("1", "true", "yes", "y", "on")
@@ -11,16 +11,11 @@ def _bool(val: str | None, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     # DB
-    database_url: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql+psycopg2://myuser:mypassword@db:5432/airqualitydb",
-    )
+    database_url: str = os.getenv("DATABASE_URL")
 
     # Sensor
     sds011_port: str | None = os.getenv("SDS011_PORT")      # e.g. "/dev/ttyUSB0"
     sds011_baud: int = int(os.getenv("SDS011_BAUD", "9600"))
-    sds011_query_mode: bool = _bool(os.getenv("SDS011_QUERY_MODE"), True)
-    sds011_scale_div10: bool = _bool(os.getenv("SDS011_DIV10"), True)  # True if library returns tenths
 
     # Loop interval (seconds)
     interval_seconds: int = int(os.getenv("READ_INTERVAL_SECONDS", "30"))
@@ -33,7 +28,13 @@ class Settings:
 
     # App
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
-    dry_run: bool = _bool(os.getenv("DRY_RUN"), False)  # if True, don’t touch HW; generate fake data
+    dry_run: bool = _get_bool(os.getenv("DRY_RUN"), False)  # if True, don’t touch HW; generate fake data
+
+    # New: sleep/wake/read cycle knobs
+    sds011_warmup_seconds: float = float(os.getenv("SDS011_WARMUP_SECONDS", "30"))
+    sds011_read_timeout_s: float = float(os.getenv("SDS011_READ_TIMEOUT_S", "2"))
+    sds011_retries:        int   = int(os.getenv("SDS011_RETRIES", "5"))
+    sds011_persist_cfg:    bool  = _get_bool( os.getenv("SDS011_PERSIST_CFG"),    False)
 
 
 settings = Settings()

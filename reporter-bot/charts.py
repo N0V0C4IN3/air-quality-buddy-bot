@@ -14,6 +14,7 @@ def df_to_line_chart_png(df: pd.DataFrame, title: str = "Air Quality") -> BytesI
     ax.set_ylabel("µg/m³")
     ax.grid(True)
     ax.legend()
+    
     bio = BytesIO()
     fig.savefig(bio, format="png", bbox_inches="tight")
     plt.close(fig)

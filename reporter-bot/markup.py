@@ -12,4 +12,5 @@ def main_menu_markup(subscribed: bool) -> ReplyKeyboardMarkup:
         KeyboardButton("📈 Last 7d"),
     )
     kb.add(KeyboardButton(sub_text))
+    kb.add(KeyboardButton("ℹ️ Info"))
     return kb
