@@ -7,6 +7,7 @@ from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from markup import main_menu_markup
 from html_helpers import *
+from config import settings
 
 UTC = timezone.utc
 bot = Bot(token=settings.telegram_token, parse_mode="HTML")
@@ -47,7 +48,7 @@ async def get_data_and_create_chart(start, end, title, message: types.Message):
     )
     await message.answer(msg, reply_markup=main_menu_markup(message.chat.id in SUBSCRIBERS), disable_web_page_preview=True)
 
-    bio = df_to_line_chart_png(df, title=title)
+    bio = df_to_line_chart_png(df, title=title, tz=settings.timezone)
     bio.name = f"{title}.png"
     await message.answer_photo(photo=bio)
 
