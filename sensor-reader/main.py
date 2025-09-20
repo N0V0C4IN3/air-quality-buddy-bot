@@ -57,6 +57,8 @@ def main():
         read_timeout_s=settings.sds011_read_timeout_s,
         retries=settings.sds011_retries,
         persist_cfg=settings.sds011_persist_cfg,  # set True if you want EEPROM persistence
+        number_of_readings_per_session=settings.sds011_number_of_readings_per_session,
+        interval_between_readings=settings.sds011_interval_between_readings
     )
 
     interval = max(1, settings.interval_seconds)
@@ -66,6 +68,7 @@ def main():
         try:
             pm25, pm10 = sensor.read()  # wakes -> warms -> reads -> sleeps
             pm25, pm10 = validate(pm25, pm10)
+
             status = classify_status(pm25, pm10)
             now = datetime.now(timezone.utc)
 
@@ -73,7 +76,6 @@ def main():
 
             with db.session() as s:
                 repo = ReadingRepository(s)
-                # You renamed ts -> timestamp in db.py
                 repo.add(pm25=pm25, pm10=pm10, status=status, timestamp=now)
 
         except Exception as e:

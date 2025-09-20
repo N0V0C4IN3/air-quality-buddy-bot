@@ -3,7 +3,6 @@ import os
 from contextlib import contextmanager
 from typing import Iterable, Optional
 from datetime import datetime
-import config
 
 from sqlalchemy import (
     create_engine, Column, String, Float, DateTime, BigInteger,
@@ -39,7 +38,7 @@ class Reading(Base):
 # ---------- Database / Unit of Work ----------
 class Database:
     def __init__(self, url: Optional[str] = None, *, echo: bool = False) -> None:
-        self.url = url or config.DATABASE_URL
+        self.url = url
         self.engine = create_engine(
             self.url,
             echo=echo,

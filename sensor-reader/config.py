@@ -35,6 +35,8 @@ class Settings:
     sds011_read_timeout_s: float = float(os.getenv("SDS011_READ_TIMEOUT_S", "2"))
     sds011_retries:        int   = int(os.getenv("SDS011_RETRIES", "5"))
     sds011_persist_cfg:    bool  = _get_bool( os.getenv("SDS011_PERSIST_CFG"),    False)
+    sds011_number_of_readings_per_session: int = int(os.getenv("SDS011_NUMBER_OF_READINGS_PER_SESSION", "10"))
+    sds011_interval_between_readings: int = int(os.getenv("SDS011_INTERVAL_BETWEEN_READINGS", "2"))
 
 
 settings = Settings()

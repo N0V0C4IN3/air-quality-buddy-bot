@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:15
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
@@ -16,6 +17,7 @@ services:
       retries: 10
 
   sensor-reader:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: sensor-reader/Dockerfile
@@ -31,6 +33,7 @@ services:
     privileged: true
 
   reporter-bot:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: reporter-bot/Dockerfile

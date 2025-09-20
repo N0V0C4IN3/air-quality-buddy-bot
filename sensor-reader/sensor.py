@@ -64,6 +64,8 @@ class SensorReader:
         persist_cfg: bool = False,   # session-only changes (no EEPROM wear)
         ignore_zero_frames: bool = True,
         extra_settle_s: float = 2.0, # wait a bit before retry when 0,0 is seen
+        number_of_readings_per_session: int = 10,
+        interval_between_readings: int = 2
     ) -> None:
         self._mock = settings.dry_run or (settings.sds011_port is None)
         self._ser: Optional[serial.Serial] = None
@@ -73,6 +75,8 @@ class SensorReader:
         self.persist_cfg = persist_cfg
         self.ignore_zero_frames = ignore_zero_frames
         self.extra_settle_s = max(0.0, extra_settle_s)
+        self.number_of_readings_per_session = number_of_readings_per_session
+        self.interval_between_readings = interval_between_readings
 
         if self._mock:
             log.info("SensorReader: DRY_RUN or no port configured; generating mock values.")
@@ -162,30 +166,51 @@ class SensorReader:
             time.sleep(self.warmup_seconds)
 
             for attempt in range(1, self.retries + 1):
-                frame = _read_frame(self._ser, timeout_s=self.read_timeout_s)
-                if not frame:
-                    log.debug("Read attempt %d/%d: timeout/no frame", attempt, self.retries)
+                pm25_readings = []
+                pm10_readings = []
+                is_successfull_attempt = True
+                for reading_no in range(1, self.number_of_readings_per_session + 1):
+                    frame = _read_frame(self._ser, timeout_s=self.read_timeout_s)
+                    if not frame:
+                        log.debug("Start attempt %d/%d, reading # %d: timeout/no frame", attempt, self.retries, reading_no)
+                        is_successfull_attempt = False
+                        break
+
+                    if log.isEnabledFor(logging.DEBUG):
+                        log.debug("C0 frame: %s", frame.hex(" "))
+
+                    parsed = _parse_frame(frame)
+                    if not parsed:
+                        log.debug("Read attempt %d/%d, reading # %d: bad frame: %s", attempt, self.retries, frame.hex(" "), reading_no)
+                        is_successfull_attempt = False
+                        break
+
+                    pm25, pm10 = parsed
+
+                    # discard initial 0/0 frames if requested
+                    if self.ignore_zero_frames and pm25 == 0.0 and pm10 == 0.0:
+                        log.info("Discarded zero frame (attempt %d/%d); settling for %.1fs…",
+                                attempt, self.retries, self.extra_settle_s)
+                        time.sleep(self.extra_settle_s)
+                        is_successfull_attempt = False
+                        break
+
+                    log.info("Adding SDS011 data: PM2.5=%.1f µg/m³, PM10=%.1f µg/m³, reading # %d", pm25, pm10, reading_no)
+
+                    pm25_readings.append(pm25)
+                    pm10_readings.append(pm10)
+                    
+                    time.sleep(self.interval_between_readings)
+                
+                if not is_successfull_attempt:
                     continue
 
-                if log.isEnabledFor(logging.DEBUG):
-                    log.debug("C0 frame: %s", frame.hex(" "))
+                pm25_mean = sum(pm25_readings) / self.number_of_readings_per_session
+                pm10_mean = sum(pm10_readings) / self.number_of_readings_per_session
 
-                parsed = _parse_frame(frame)
-                if not parsed:
-                    log.debug("Read attempt %d/%d: bad frame: %s", attempt, self.retries, frame.hex(" "))
-                    continue
-
-                pm25, pm10 = parsed
-
-                # discard initial 0/0 frames if requested
-                if self.ignore_zero_frames and pm25 == 0.0 and pm10 == 0.0:
-                    log.info("Discarded zero frame (attempt %d/%d); settling for %.1fs…",
-                             attempt, self.retries, self.extra_settle_s)
-                    time.sleep(self.extra_settle_s)
-                    continue
-
-                log.info("SDS011 data: PM2.5=%.1f µg/m³, PM10=%.1f µg/m³", pm25, pm10)
-                return (round(pm25, 1), round(pm10, 1))
+                log.info("SDS011 data: PM2.5=%.1f µg/m³, PM10=%.1f µg/m³, number of redings: %d", pm25_mean, pm10_mean, self.number_of_readings_per_session)
+                
+                return (round(pm25_mean, 1), round(pm10_mean, 1))
 
             raise RuntimeError("Failed to read/parse SDS011 frame")
         finally:
