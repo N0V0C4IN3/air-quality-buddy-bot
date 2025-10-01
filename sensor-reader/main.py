@@ -9,6 +9,8 @@ from config import settings
 from sensor import SensorReader
 from common.db import Database, ReadingRepository  # using your db.py
 
+from publisher import Publisher
+
 # ---- logging ----
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -49,6 +51,7 @@ def validate(pm25: float, pm10: float) -> tuple[float, float]:
 def main():
     log.info("Starting sensor-reader (dry_run=%s, port=%s)", settings.dry_run, settings.sds011_port)
     db = Database(url=settings.database_url, echo=False)
+    publisher = Publisher()
     db.create_all()
 
     # SensorReader now performs: wake -> warm up -> read -> sleep inside each read()
@@ -63,32 +66,46 @@ def main():
 
     interval = max(1, settings.interval_seconds)
 
-    while not _stop:
-        loop_start = time.monotonic()
-        try:
-            pm25, pm10 = sensor.read()  # wakes -> warms -> reads -> sleeps
-            pm25, pm10 = validate(pm25, pm10)
+    try:
+        while not _stop:
+            loop_start = time.monotonic()
+            try:
+                pm25, pm10 = sensor.read()  # wakes -> warms -> reads -> sleeps
+                pm25, pm10 = validate(pm25, pm10)
 
-            status = classify_status(pm25, pm10)
-            now = datetime.now(timezone.utc)
+                status = classify_status(pm25, pm10)
 
-            log.info("Reading pm2.5=%.1f μg/m³, pm10=%.1f μg/m³, status=%s", pm25, pm10, status)
+                now = datetime.now(timezone.utc)
+                ts = time.time()
 
-            with db.session() as s:
-                repo = ReadingRepository(s)
-                repo.add(pm25=pm25, pm10=pm10, status=status, timestamp=now)
+                log.info("Reading pm2.5=%.1f μg/m³, pm10=%.1f μg/m³, status=%s", pm25, pm10, status)
 
-        except Exception as e:
-            log.exception("Failed to read/store sensor data: %s", e)
+                with db.session() as s:
+                    repo = ReadingRepository(s)
+                    repo.add(pm25=pm25, pm10=pm10, status=status, timestamp=now)
 
-        # Periodic sleep: aim for 'interval' seconds between cycle starts
-        elapsed = time.monotonic() - loop_start
-        remaining = max(0.0, interval - elapsed)
-        end_time = time.monotonic() + remaining
-        while not _stop and time.monotonic() < end_time:
-            time.sleep(0.2)
+                if (status != "ok"):
+                    publisher.publish_alert(
+                        kind=status,
+                        pm10_value=pm10,
+                        pm25_value=pm25,
+                        unit="µg/m³",
+                        ts=ts
+                    )
 
-    log.info("Sensor-reader stopped gracefully.")
+            except Exception as e:
+                log.exception("Failed to read/store sensor data: %s", e)
+              
+            # Periodic sleep: aim for 'interval' seconds between cycle starts
+            elapsed = time.monotonic() - loop_start
+            remaining = max(0.0, interval - elapsed)
+            end_time = time.monotonic() + remaining
+            while not _stop and time.monotonic() < end_time:
+                time.sleep(0.2)
+    finally:
+        publisher.close()
+        log.info("Sensor-reader stopped gracefully.")
+
     return 0
 
 

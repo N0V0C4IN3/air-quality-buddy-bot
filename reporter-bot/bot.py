@@ -8,6 +8,16 @@ from datetime import datetime, timedelta, timezone
 from markup import main_menu_markup
 from html_helpers import *
 from config import settings
+from consumer import AsyncConsumer, require 
+import os
+import asyncio
+import logging
+
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+log = logging.getLogger("reporter_bot")
 
 UTC = timezone.utc
 bot = Bot(token=settings.telegram_token, parse_mode="HTML")
@@ -114,5 +124,117 @@ async def info_handler(message: types.Message):
         disable_web_page_preview=True,
     )
 
+# =======================
+# AMQP consumer integration
+# =======================
+
+def _parse_routing_keys() -> list[str]:
+    # Comma- or whitespace-separated in env
+    rks = require("AQ_ROUTING_KEYS")
+    log.debug("Parsing AQ_ROUTING_KEYS raw='%s'", rks)
+
+    parts = []
+    for chunk in rks.split(","):
+        parts.extend(chunk.split())
+    keys = [p.strip() for p in parts if p.strip()]
+
+    if not keys:
+        log.error("AQ_ROUTING_KEYS provided but parsed to empty list")
+        raise RuntimeError("AQ_ROUTING_KEYS provided but empty after parsing")
+    
+    log.info("Routing keys parsed: %s", keys)
+    return keys
+
+async def _on_alert(msg: dict) -> None:
+    """
+    Called for each AMQP message (already JSON-decoded).
+    Sends notifications to all subscribed chats.
+    """
+    # Free-form: support err/warn/ok and generic payloads
+    # mtype = msg.get("type", "alert").upper()
+    pm25 = msg.get("pm25_value")
+    pm10 = msg.get("pm10_value")
+    ts   = msg.get("ts")
+
+    sub_count = len(SUBSCRIBERS)
+    log.info("Received alert msg keys=%s pm25=%s pm10=%s ts=%s -> fanout to %d subscriber(s)",
+             list(msg.keys()), pm25, pm10, ts, sub_count)
+
+    if sub_count == 0:
+        log.warning("No subscribers; message will not be delivered")
+
+    # Fan out to subscribers (simple in-memory set)
+    for chat_id in list(SUBSCRIBERS):
+        try:
+            await bot.send_message(
+                chat_id=chat_id, 
+                text=format_status_block(pm25, pm10, datetime.fromtimestamp(ts, tz=timezone.utc)), 
+                reply_markup=main_menu_markup(chat_id in SUBSCRIBERS),
+                disable_web_page_preview=True)
+            
+            log.debug("Delivered alert to chat_id=%s", chat_id)
+        except Exception as e:
+            # ignore per-chat errors to avoid blocking the rest
+            log.warning("Failed to deliver to chat_id=%s: %s", chat_id, e)
+
+async def on_startup(_):
+    """
+    aiogram startup hook: start the AMQP consumer task.
+    """
+    url      = require("AMQP_URL")              # e.g. amqp://user:pass@rabbitmq:5672/ or /vhost
+    exchange = require("AQ_EXCHANGE")           # e.g. aq.alerts
+    queue    = require("AQ_QUEUE_REPORTER")     # e.g. reporter-bot-alerts
+    keys     = _parse_routing_keys()            # e.g. alerts.pm.err,alerts.pm.warn OR alerts.pm.#
+
+
+    log.info("Starting AMQP consumer exchange=%s queue=%s keys=%s",
+             exchange, queue, keys)
+
+    consumer = AsyncConsumer(
+        url=url,
+        exchange=exchange,
+        queue=queue,
+        routing_keys=keys,
+    )
+
+    # Optional QoS via env
+    prefetch = os.environ.get("AMQP_PREFETCH")
+    if prefetch:
+        # set via env inside consumer.start() (already supported in AsyncConsumer)
+        log.info("Using AMQP_PREFETCH=%s (consumer will set QoS)", prefetch)
+
+    # Keep references on dispatcher for shutdown
+    task = asyncio.create_task(consumer.start(_on_alert), name="amqp-consumer")
+
+    task.add_done_callback(_done)
+
+    dp["amqp_consumer"] = consumer
+    dp["amqp_task"] = task
+    
+    log.info("[startup] AMQP consumer task created")
+
+def _done(t: asyncio.Task):
+    try:
+        t.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        log.exception("AMQP consumer task crashed")
+
+async def on_shutdown(_):
+    """
+    aiogram shutdown hook: cancel the AMQP consumer task.
+    """
+    task = dp.get("amqp_task")
+    if task:
+        log.info("Cancelling AMQP consumer task...")
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            log.debug("AMQP consumer task cancelled cleanly")
+
+    log.info("[shutdown] AMQP consumer stopped")
+
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup, on_shutdown=on_shutdown)
