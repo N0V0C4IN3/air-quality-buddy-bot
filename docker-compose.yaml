@@ -32,6 +32,19 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+  
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
       
   sensor-reader:
     restart: unless-stopped
@@ -42,6 +55,8 @@ services:
         TTY_GID: "20"
     depends_on:
       db:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     env_file:
       - .env
@@ -56,6 +71,10 @@ services:
       dockerfile: reporter-bot/Dockerfile
     depends_on:
       db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     env_file:
       - .env
@@ -74,3 +93,4 @@ services:
 volumes:
   pgdata:
   rabbitmq-data:
+  redis-data:
