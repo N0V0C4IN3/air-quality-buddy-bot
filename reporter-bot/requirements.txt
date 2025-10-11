@@ -5,3 +5,5 @@ pandas==2.2.2
 matplotlib==3.9.2
 python-dateutil==2.9.0.post0
 aio-pika>=9.4.0
+alembic
+dotenv
