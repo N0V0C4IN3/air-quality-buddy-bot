@@ -72,7 +72,6 @@ class Database:
         finally:
             s.close()
 
-
 # ---------- Repository ----------
 class ReadingRepository:
     def __init__(self, session) -> None:
@@ -129,3 +128,22 @@ class ReadingRepository:
     def prune_older_than(self, before: datetime) -> int:
         res = self.session.query(Reading).filter(Reading.timestamp < before).delete()
         return int(res)
+
+class ChatRepository:
+    def __init__(self, session):
+        self.session = session
+
+    def get_subscribed_ids(self) -> list[str]:
+        return [
+            chat.chat_id
+            for chat in self.session.query(Chat).filter_by(is_subscribed=True).all()
+        ]
+
+    def upsert(self, chat_id: str, is_subscribed: bool):
+        chat = self.session.query(Chat).filter_by(chat_id=str(chat_id)).first()
+        if chat:
+            chat.is_subscribed = is_subscribed
+        else:
+            chat = Chat(chat_id=str(chat_id), is_subscribed=is_subscribed)
+            self.session.add(chat)
+        self.session.commit()

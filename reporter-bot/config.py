@@ -22,4 +22,7 @@ class Settings:
     alert_cooldown_seconds: int = int(os.getenv("ALERT_COOLDOWN_SECONDS", "1800"))  # 30 min
     enable_alerts: bool = _bool(os.getenv("ENABLE_ALERTS"), True)
 
+    redis_host: str = os.getenv("REDIS_HOST")
+    redis_port: str = os.getenv("REDIS_PORT")
+
 settings = Settings()
