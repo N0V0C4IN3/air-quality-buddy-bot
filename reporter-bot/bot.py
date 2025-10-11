@@ -1,6 +1,6 @@
 from aiogram import Bot, Dispatcher, executor, types
 from config import settings
-from common.db import Database, ReadingRepository
+from common.db import Database, ReadingRepository, ChatRepository
 from charts import df_to_line_chart_png
 import pandas as pd
 from io import BytesIO
@@ -12,6 +12,7 @@ from consumer import AsyncConsumer, require
 import os
 import asyncio
 import logging
+from redis_helper import RedisHelper
 
 logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -22,8 +23,7 @@ log = logging.getLogger("reporter_bot")
 UTC = timezone.utc
 bot = Bot(token=settings.telegram_token, parse_mode="HTML")
 dp = Dispatcher(bot)
-
-SUBSCRIBERS: set[int] = set()
+redis = RedisHelper(host=settings.redis_host, port=settings.redis_port)
 
 def classify(pm25, pm10):
     if pm25 >= settings.pm25_err or pm10 >= settings.pm10_err:
@@ -56,7 +56,7 @@ async def get_data_and_create_chart(start, end, title, message: types.Message):
         len(df),
         title=title
     )
-    await message.answer(msg, reply_markup=main_menu_markup(message.chat.id in SUBSCRIBERS), disable_web_page_preview=True)
+    await message.answer(msg, reply_markup=main_menu_markup(redis.is_subscribed(message.chat.id )), disable_web_page_preview=True)
 
     bio = df_to_line_chart_png(df, title=title, tz=settings.timezone)
     bio.name = f"{title}.png"
@@ -67,7 +67,7 @@ async def get_data_and_create_chart(start, end, title, message: types.Message):
 async def start_cmd(message: types.Message):
     chat_id = message.chat.id
     text = "Welcome! Use the buttons below:"
-    await message.answer(text, reply_markup=main_menu_markup(chat_id in SUBSCRIBERS))
+    await message.answer(text, reply_markup=main_menu_markup(redis.is_subscribed(chat_id)))
 
 # 📟 Status
 @dp.message_handler(lambda m: m.text == "📟 Status")
@@ -78,7 +78,7 @@ async def status_handler(message: types.Message):
         return
     await message.answer(
         format_status_block(r.pm25, r.pm10, r.timestamp),
-        reply_markup=main_menu_markup(message.chat.id in SUBSCRIBERS),
+        reply_markup=main_menu_markup(redis.is_subscribed(message.chat.id)),
         disable_web_page_preview=True,
     )
     
@@ -109,18 +109,24 @@ async def last7_handler(message: types.Message):
 @dp.message_handler(lambda m: m.text in ["🔔 Subscribe","🔔 Unsubscribe"])
 async def toggle_sub_handler(message: types.Message):
     chat_id = message.chat.id
-    if chat_id in SUBSCRIBERS:
-        SUBSCRIBERS.remove(chat_id)
-        await message.answer("🔕 Unsubscribed from alerts.", reply_markup=main_menu_markup(False))
-    else:
-        SUBSCRIBERS.add(chat_id)
-        await message.answer("🔔 Subscribed to alerts.", reply_markup=main_menu_markup(True))
+    subscribed = redis.is_subscribed(chat_id)
+
+    with Database(url=settings.database_url).session() as s:
+        repo = ChatRepository(s)
+        if subscribed:
+            redis.remove_subscriber(chat_id)
+            repo.upsert(chat_id, False)
+            await message.answer("🔕 Unsubscribed from alerts.", reply_markup=main_menu_markup(False))
+        else:
+            repo.upsert(chat_id, True)
+            redis.add_subscriber(chat_id)
+            await message.answer("🔔 Subscribed to alerts.", reply_markup=main_menu_markup(True))
 
 @dp.message_handler(lambda m: m.text in ["ℹ️ Info", "Info"])
 async def info_handler(message: types.Message):
     await message.answer(
         info_text(),
-        reply_markup=main_menu_markup(message.chat.id in SUBSCRIBERS),
+        reply_markup=main_menu_markup(redis.is_subscribed(message.chat.id)),
         disable_web_page_preview=True,
     )
 
@@ -156,7 +162,8 @@ async def _on_alert(msg: dict) -> None:
     pm10 = msg.get("pm10_value")
     ts   = msg.get("ts")
 
-    sub_count = len(SUBSCRIBERS)
+    subscribers = redis.get_subscribers()
+    sub_count = len(subscribers)
     log.info("Received alert msg keys=%s pm25=%s pm10=%s ts=%s -> fanout to %d subscriber(s)",
              list(msg.keys()), pm25, pm10, ts, sub_count)
 
@@ -164,12 +171,12 @@ async def _on_alert(msg: dict) -> None:
         log.warning("No subscribers; message will not be delivered")
 
     # Fan out to subscribers (simple in-memory set)
-    for chat_id in list(SUBSCRIBERS):
+    for chat_id in subscribers:
         try:
             await bot.send_message(
                 chat_id=chat_id, 
                 text=format_status_block(pm25, pm10, datetime.fromtimestamp(ts, tz=timezone.utc)), 
-                reply_markup=main_menu_markup(chat_id in SUBSCRIBERS),
+                reply_markup=main_menu_markup(chat_id in subscribers),
                 disable_web_page_preview=True)
             
             log.debug("Delivered alert to chat_id=%s", chat_id)
@@ -210,6 +217,14 @@ async def on_startup(_):
 
     dp["amqp_consumer"] = consumer
     dp["amqp_task"] = task
+
+    # Preload cache from DB
+    db = Database(url=settings.database_url)
+    with db.session() as s:
+        repo = ChatRepository(s)
+        ids = repo.get_subscribed_ids()
+        redis.preload_subscribers(ids)
+        log.info("Preloaded %d subscriber(s) into Redis", len(ids))
     
     log.info("[startup] AMQP consumer task created")
 
