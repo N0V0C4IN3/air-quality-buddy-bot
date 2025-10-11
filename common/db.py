@@ -5,7 +5,7 @@ from typing import Iterable, Optional
 from datetime import datetime
 
 from sqlalchemy import (
-    create_engine, Column, String, Float, DateTime, BigInteger,
+    create_engine, Column, String, Float, DateTime, BigInteger, Boolean,
     func, Index
 )
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column
@@ -34,6 +34,12 @@ class Reading(Base):
         nullable=False,
         index=True,
     )
+
+class Chat(Base):
+    __tablename__ = "chats"
+
+    chat_id: Mapped[str] = mapped_column(String, primary_key=True)
+    is_subscribed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 # ---------- Database / Unit of Work ----------
 class Database:

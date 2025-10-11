@@ -8,6 +8,9 @@ WORKDIR /app
 
 RUN useradd -m -u 1000 -s /usr/sbin/nologin runner
 
+COPY alembic.ini /app/alembic.ini
+COPY alembic /app/alembic
+
 COPY reporter-bot/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -17,4 +20,4 @@ COPY reporter-bot /app
 ENV PYTHONPATH=/app
 USER runner
 
-CMD ["python", "bot.py"]
+CMD ["bash", "-c", "alembic upgrade head && python bot.py"]
