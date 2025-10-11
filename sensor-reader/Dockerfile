@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+COPY alembic.ini /app/alembic.ini
+COPY alembic /app/alembic
+
 COPY common /app/common
 COPY sensor-reader/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -31,4 +34,4 @@ USER runner
 # If you need to access /dev/ttyUSB0 inside container, you’ll mount it in compose.
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "main.py"]
+CMD ["bash", "-c", "alembic upgrade head && python main.py"]
