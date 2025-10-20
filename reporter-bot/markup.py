@@ -8,7 +8,7 @@ def main_menu_markup(subscribed: bool) -> ReplyKeyboardMarkup:
     )
     kb.row(
         KeyboardButton("📅 Today"),
-        KeyboardButton("🕒 Last 24h"),
+        KeyboardButton("🕒 Last 12h"),
         KeyboardButton("📈 Last 7d"),
     )
     kb.add(KeyboardButton(sub_text))

@@ -5,9 +5,9 @@ from config import settings
 
 try:
     from zoneinfo import ZoneInfo
-    KYIV = ZoneInfo("Europe/Kyiv")
+    TIMEZONE = ZoneInfo(settings.timezone)
 except Exception:
-    KYIV = timezone.utc  # graceful fallback
+    TIMEZONE = timezone.utc  # graceful fallback
 
 def fmt_num(x: float) -> str:
     # 1 decimal, thin space thousands if needed
@@ -15,7 +15,7 @@ def fmt_num(x: float) -> str:
 
 def fmt_dt(dt_utc: datetime) -> str:
     # Show local time with timezone
-    local = dt_utc.astimezone(KYIV)
+    local = dt_utc.astimezone(TIMEZONE)
     return local.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 def status_emoji(pm25: float, pm10: float, warn25=35, err25=75, warn10=50, err10=100) -> str:

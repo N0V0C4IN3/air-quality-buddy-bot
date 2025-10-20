@@ -7,7 +7,7 @@
 ### Features:
 - Wake → warm up → read → sleep cycle per sample (protects sensor + saves power)
 - Stores PM2.5 / PM10 in your DB
-- Telegram bot: latest reading, Today / 24h / 7d charts, subscribe/unsubscribe toggle
+- Telegram bot: latest reading, Today / 12h / 7d charts, subscribe/unsubscribe toggle
 - Optional alerts with cooldown
 - Housekeeper to prune old data
 - Timezone-aware charts

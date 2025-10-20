@@ -20,7 +20,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("reporter_bot")
 
-UTC = timezone.utc
+try:
+    from zoneinfo import ZoneInfo
+    TIMEZONE = ZoneInfo(settings.timezone)
+except Exception:
+    TIMEZONE = timezone.utc
+
 bot = Bot(token=settings.telegram_token, parse_mode="HTML")
 dp = Dispatcher(bot)
 redis = RedisHelper(host=settings.redis_host, port=settings.redis_port)
@@ -37,13 +42,13 @@ def get_latest():
     with db.session() as s:
         return ReadingRepository(s).get_latest()
 
-def get_range(start, end):
+def get_range(start: datetime, end: datetime):
     db = Database(url=settings.database_url)
     with db.session() as s:
         return ReadingRepository(s).get_range(start=start, end=end)
     
-async def get_data_and_create_chart(start, end, title, message: types.Message):
-    rows = get_range(start, end)
+async def get_data_and_create_chart(start: datetime, end: datetime, title, message: types.Message):
+    rows = get_range(start.astimezone(ZoneInfo("UTC")), end.astimezone(ZoneInfo("UTC")))
     df = pd.DataFrame([{"timestamp": r.timestamp, "pm25": r.pm25, "pm10": r.pm10} for r in rows])
     if df.empty:
         await message.answer("No data for today.")
@@ -85,23 +90,22 @@ async def status_handler(message: types.Message):
 # 📅 Today
 @dp.message_handler(lambda m: m.text == "📅 Today")
 async def today_handler(message: types.Message):
-    now = datetime.now(UTC)
-    start = datetime(now.year, now.month, now.day, tzinfo=UTC)
+    now = datetime.now(TIMEZONE)
+    start = datetime(now.year, now.month, now.day, tzinfo=TIMEZONE)
     end = start + timedelta(days=1)
-    rows = get_range(start, end)
     await get_data_and_create_chart(start, end, "Today", message)
     
-# 🕒 Last 24h
-@dp.message_handler(lambda m: m.text == "🕒 Last 24h")
-async def last24_handler(message: types.Message):
-    now = datetime.now(UTC)
-    start = now - timedelta(hours=24)
-    await get_data_and_create_chart(start, now, "Last 24h", message)
+# 🕒 Last 12h
+@dp.message_handler(lambda m: m.text == "🕒 Last 12h")
+async def last12_handler(message: types.Message):
+    now = datetime.now(TIMEZONE)
+    start = now - timedelta(hours=12)
+    await get_data_and_create_chart(start, now, "Last 12h", message)
 
 # 📈 Last 7d
 @dp.message_handler(lambda m: m.text == "📈 Last 7d")
 async def last7_handler(message: types.Message):
-    now = datetime.now(UTC)
+    now = datetime.now(TIMEZONE)
     start = now - timedelta(days=7)
     await get_data_and_create_chart(start, now, "Last 7d", message)
 
