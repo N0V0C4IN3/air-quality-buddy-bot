@@ -1,7 +1,7 @@
 # Air Quality + Telegram Bot Services
 ### Service Description
 * **sensor-reader** service reads the SDS011 sensor's data (PM2.5 and PM10) writes it to db.
-* **reporter-bot** service fetches the reports from db (Today, Last 24h, Last 7d).
+* **reporter-bot** service fetches the reports from db (Today, Last 12h, Last 7d).
 * **housekeeper** cleans the db
 
 ### Features:
