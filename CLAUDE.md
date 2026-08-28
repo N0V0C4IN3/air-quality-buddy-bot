@@ -41,6 +41,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest                      # whole suite
 python -m pytest tests/test_reports.py # one file
 python -m pytest -k cooldown           # one behaviour
+python -m pytest tests/test_migrations.py  # runs the real Alembic scripts on SQLite
 python -m pytest tests/test_alerting.py::test_escalation_is_never_suppressed
 ```
 
@@ -60,6 +61,10 @@ There is no linter or CI config in this repo.
 - **Timestamps are UTC in the DB, local at the edges.** `Reading.timestamp` is written as `datetime.now(timezone.utc)`. `reports.Window.range()` builds ranges in the configured timezone and `ReadingReports` converts to UTC before querying; the chart axes convert back. Keep new query/display code on both sides of that seam.
 - **Subscriptions go through one module.** `reporter-bot/subscriptions.py` owns the write order: Postgres `chats` (the record) first, then the cache. Handlers call `subs.subscribe/unsubscribe/toggle/all` — never Redis or `ChatRepository` directly. The cache has two adapters in `subscriber_cache.py` (Redis, in-memory).
 - **Alert path:** `common/alerts.py` owns the payload and the routing key; `sensor-reader/publisher.py` (blocking `pika`) and `reporter-bot/consumer.py` (`aio_pika` robust) are adapters that only move bytes. `sensor-reader/alerting.py` decides *whether* to publish — same level is suppressed for `ALERT_COOLDOWN_SECONDS`, a warn→err escalation always passes, and a return to ok rearms the gate. Change the contract in `common/alerts.py`, not at either end.
+- **Charts are PNGs, so there is no hover layer.** Identity comes from a titled pane per series plus a direct end label, and a threshold band always carries a text label — colour never carries meaning alone. `charts.py` owns the palette (validated for colour-vision safety); the amber/red band hues are reserved for threshold state and must never be used for a series.
+- **Two pollutants, two panes.** A shared y-axis cannot carry two different warn limits honestly (PM2.5 warns at 35, PM10 at 50), which is why `window_chart` stacks them. `Y_FLOOR` keeps a quiet day from being autoscaled into a crisis.
+- **Chart theme is a stored per-chat preference.** Telegram never tells a bot which theme the viewer uses, so `chats.chart_theme` holds it and `Subscriptions.theme()` reads it. The dark palette is stepped for the dark surface, not inverted.
+- **Callback data is a wire format.** `callbacks.py` owns the `w:<slug>` / `theme:<slug>` grammar, deliberately free of any aiogram import so it stays testable. Changing a slug orphans every button already on someone's screen; Telegram caps the payload at 64 bytes.
 - **One `Database` per process.** Constructed once in `bot.py` / `main.py` and passed in; never build one inside a handler or a loop pass — that creates a fresh engine and pool each time.
 - **aiogram is pinned to 2.25.1** — decorator/`executor.start_polling` style, not the v3 Router API.
 - **Thresholds have one owner.** `common.air_quality.Thresholds` is built from env once per service and passed around; nothing else should read `PM25_WARN` and friends or re-implement the comparison.

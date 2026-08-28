@@ -2,10 +2,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from common.air_quality import Level
 from common.db import ReadingRepository
 from reports import ReadingReports, Report, Window
 
 KYIV = timezone(timedelta(hours=3))  # fixed offset: no tz database needed
+PNG_MAGIC = bytes([0x89]) + b"PNG"
 
 
 @pytest.fixture
@@ -50,7 +52,24 @@ def test_rolling_windows_end_now(window, span):
 
 
 def test_window_titles():
-    assert [w.title for w in Window] == ["Today", "Last 12h", "Last 7d"]
+    assert [w.title for w in Window] == ["Today", "Last 12h", "Last 7d", "Patterns"]
+
+
+def test_window_slugs_round_trip():
+    """Slugs travel in callback data on live buttons — they must survive."""
+    for window in Window:
+        assert Window.from_slug(window.slug) is window
+
+
+def test_only_the_seven_day_window_is_smoothed():
+    assert Window.LAST_7D.smooth_window > 1
+    assert Window.TODAY.smooth_window == 0
+    assert Window.LAST_12H.smooth_window == 0
+
+
+def test_patterns_is_the_only_heatmap():
+    assert Window.PATTERNS.is_heatmap
+    assert not any(w.is_heatmap for w in Window if w is not Window.PATTERNS)
 
 
 # ---------- reports ----------
@@ -81,10 +100,10 @@ def test_report_carries_stats_and_a_png(reports, db):
 
     assert not report.is_empty
     assert "Today" in report.text
-    assert "Samples: <b>3</b>" in report.text
+    assert "3 samples" in report.text
     assert "10.0" in report.text and "30.0" in report.text  # min and max
-    assert report.chart.getvalue().startswith(b"\x89PNG")
-    assert report.chart.name == "Today.png"
+    assert report.chart.getvalue().startswith(PNG_MAGIC)
+    assert report.chart.name == "today.png"   # slug, stable in callback data
 
 
 def test_window_excludes_readings_outside_it(reports, db):
@@ -94,7 +113,7 @@ def test_window_excludes_readings_outside_it(reports, db):
 
     report = reports.for_window(Window.TODAY, now=now)
 
-    assert "Samples: <b>1</b>" in report.text
+    assert "1 samples" in report.text
 
 
 def test_a_reading_just_before_local_midnight_belongs_to_yesterday(reports, db):
@@ -108,18 +127,77 @@ def test_a_reading_just_before_local_midnight_belongs_to_yesterday(reports, db):
 
 # ---------- status block ----------
 
-def test_latest_returns_none_without_readings(reports):
-    assert reports.latest() is None
+def test_status_returns_none_without_readings(reports):
+    assert reports.status() is None
+    assert reports.status_text() is None
 
 
-def test_latest_uses_the_newest_reading(reports, db):
+def test_status_uses_the_newest_reading(reports, db):
+    now = datetime(2026, 8, 27, 10, 5, tzinfo=timezone.utc)
     add_reading(db, datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc), pm25=11.0)
     add_reading(db, datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc), pm25=99.0)
 
-    block = reports.latest()
+    view = reports.status(now=now)
 
-    assert "99.0" in block
-    assert "11.0" not in block
+    assert view.pm25 == 99.0
+    assert view.level is Level.ERR
+
+
+def test_status_compares_against_an_hour_ago(reports, db):
+    now = datetime(2026, 8, 27, 10, 5, tzinfo=timezone.utc)
+    add_reading(db, datetime(2026, 8, 27, 9, 30, tzinfo=timezone.utc), pm25=20.0)
+    add_reading(db, datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc), pm25=10.0)
+
+    view = reports.status(now=now)
+
+    assert view.pm25_before == 20.0
+    assert "↓ 50%" in reports.status_text(now=now)
+
+
+def test_status_card_shows_a_sparkline_of_recent_readings(reports, db):
+    now = datetime(2026, 8, 27, 10, 5, tzinfo=timezone.utc)
+    for minute, pm25 in [(35, 5.0), (45, 10.0), (55, 20.0), (4, 40.0)]:
+        hour = 9 if minute > 30 else 10
+        add_reading(db, datetime(2026, 8, 27, hour, minute, tzinfo=timezone.utc), pm25=pm25)
+
+    view = reports.status(now=now)
+    assert view.spark == [5.0, 10.0, 20.0, 40.0]
+    assert "▁" in reports.status_text(now=now)
+
+
+def test_a_quiet_sensor_is_reported_as_quiet(reports, db):
+    """A dead reader must not keep looking like clean air."""
+    add_reading(db, datetime(2026, 8, 27, 8, 0, tzinfo=timezone.utc), pm25=5.0)
+    now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+
+    view = reports.status(now=now)
+    assert view.is_stale(now)
+
+    text = reports.status_text(now=now)
+    assert "Sensor quiet" in text
+    assert "2 h" in text
+
+
+def test_a_fresh_reading_is_not_stale(reports, db):
+    now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+    add_reading(db, datetime(2026, 8, 27, 9, 58, tzinfo=timezone.utc), pm25=5.0)
+
+    assert reports.status(now=now).is_stale(now) is False
+    assert "Sensor quiet" not in reports.status_text(now=now)
+
+
+def test_patterns_report_names_the_worst_hour(reports, db):
+    now = datetime(2026, 8, 27, 12, 0, tzinfo=KYIV)
+    for day in range(24, 27):
+        for hour, pm25 in [(6, 5.0), (18, 60.0)]:
+            add_reading(db, datetime(2026, 8, day, hour, 0, tzinfo=timezone.utc), pm25=pm25)
+
+    report = reports.for_window(Window.PATTERNS, now=now)
+
+    assert not report.is_empty
+    assert report.chart.getvalue().startswith(PNG_MAGIC)
+    assert "worst hour" in report.text
+    assert "21:00" in report.text        # 18:00 UTC is 21:00 local
 
 
 def test_status_block_colour_follows_the_configured_thresholds(db):

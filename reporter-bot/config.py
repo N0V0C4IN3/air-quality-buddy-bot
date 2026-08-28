@@ -64,6 +64,9 @@ class Settings:
 
     thresholds: Thresholds
 
+    # how often the reader is expected to write; drives the stale-sensor card
+    reading_interval_seconds: int
+
     # alerting
     enable_alerts: bool
     alert_cooldown_seconds: int
@@ -91,6 +94,7 @@ class Settings:
             tz=tz,
             timezone_name=getattr(tz, "key", str(tz)),
             thresholds=Thresholds.from_env(),
+            reading_interval_seconds=max(1, int(os.getenv("READ_INTERVAL_SECONDS", "300"))),
             enable_alerts=_bool("ENABLE_ALERTS", True),
             alert_cooldown_seconds=int(os.getenv("ALERT_COOLDOWN_SECONDS", "1800")),
             redis_host=_require("REDIS_HOST"),
