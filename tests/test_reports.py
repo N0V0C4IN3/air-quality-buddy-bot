@@ -203,21 +203,55 @@ def test_patterns_report_names_the_worst_hour(reports, db):
     assert "<pre>" not in report.text    # worst/best hour are drawn into the PNG
 
 
-def test_status_block_colour_follows_the_configured_thresholds(db):
-    from common.air_quality import Level, Thresholds
+# ---------- alert fan-out ----------
+
+def test_alert_is_a_card_png(reports, db):
+    at = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+    add_reading(db, at, pm25=80.0, pm10=20.0)
+
+    report = reports.alert_report(80.0, 20.0, at, now=at)
+
+    assert report.chart.getvalue().startswith(PNG_MAGIC)
+    assert report.chart.name == "alert.png"
+    assert Level.ERR.emoji in report.text
+    assert "high" in report.text
+    assert "13:00:00" in report.text          # UTC+3, the configured zone
+
+
+def test_alert_describes_the_reading_that_tripped_it(reports, db):
+    """A newer, calmer reading must not rewrite the alert that was raised."""
+    at = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+    add_reading(db, at, pm25=2.0, pm10=2.0)          # the calm reading after it
+
+    report = reports.alert_report(90.0, 20.0, at, now=at)
+
+    assert Level.ERR.emoji in report.text
+
+
+def test_alert_renders_without_any_history(reports):
+    at = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+    assert reports.alert_report(90.0, 20.0, at, now=at).chart is not None
+
+
+def test_alert_colour_follows_the_configured_thresholds(db):
+    from common.air_quality import Thresholds
 
     at = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
     strict = ReadingReports(db, KYIV, Thresholds(pm25_warn=10, pm10_warn=20,
                                                  pm25_err=30, pm10_err=40))
     lax = ReadingReports(db, KYIV, Thresholds())
 
-    assert Level.WARN.emoji in strict.status_block(12.0, 1.0, at)
-    assert Level.OK.emoji in lax.status_block(12.0, 1.0, at)
+    assert Level.WARN.emoji in strict.alert_report(12.0, 1.0, at, now=at).text
+    assert Level.OK.emoji in lax.alert_report(12.0, 1.0, at, now=at).text
 
 
-def test_status_block_renders_time_in_the_configured_zone(reports):
+def test_alert_text_fallback_still_carries_the_numbers(reports):
+    """If a render fails the alert must still arrive."""
     at = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
-    assert "13:00:00" in reports.status_block(5.0, 5.0, at)  # UTC+3
+    text = reports.alert_text(5.0, 7.0, at)
+
+    assert "5.0" in text and "7.0" in text
+    assert "13:00:00" in text                 # UTC+3
 
 
 def test_report_is_immutable():
