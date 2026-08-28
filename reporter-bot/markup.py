@@ -3,6 +3,9 @@
 Two kinds: the persistent reply keyboard at the bottom of the chat, and the
 inline keyboard attached to a chart card so switching windows edits that card in
 place instead of appending another pair of messages.
+
+What the buttons say and how the rows divide lives in `keyboard_layout`, which
+carries no aiogram import so it can be tested.
 """
 from __future__ import annotations
 
@@ -11,14 +14,8 @@ from aiogram.types import (
 )
 
 from callbacks import theme_action, window_action
+from keyboard_layout import theme_label, window_rows
 from reports import Window
-
-WINDOW_LABELS = {
-    Window.TODAY: "📅 Today",
-    Window.LAST_12H: "🕒 12h",
-    Window.LAST_7D: "📈 7d",
-    Window.PATTERNS: "🗓 Patterns",
-}
 
 
 def main_menu_markup(subscribed: bool) -> ReplyKeyboardMarkup:
@@ -40,18 +37,13 @@ def main_menu_markup(subscribed: bool) -> ReplyKeyboardMarkup:
 
 def window_markup(active: Window, *, theme: str = "light") -> InlineKeyboardMarkup:
     """Buttons under a chart card. The active window is marked, not hidden."""
-    kb = InlineKeyboardMarkup(row_width=4)
-    kb.row(*[
-        InlineKeyboardButton(
-            f"· {label} ·" if window is active else label,
-            callback_data=window_action(window),
-        )
-        for window, label in WINDOW_LABELS.items()
-    ])
+    kb = InlineKeyboardMarkup(row_width=3)
+    for row in window_rows(active):
+        kb.row(*[
+            InlineKeyboardButton(label, callback_data=window_action(window))
+            for window, label in row
+        ])
     kb.add(
-        InlineKeyboardButton(
-            "🌙 Dark charts" if theme == "light" else "☀️ Light charts",
-            callback_data=theme_action(active),
-        )
+        InlineKeyboardButton(theme_label(theme), callback_data=theme_action(active))
     )
     return kb

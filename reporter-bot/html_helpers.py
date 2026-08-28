@@ -53,6 +53,17 @@ def sparkline(values) -> str:
     )
 
 
+# Telegram HTML cannot colour ordinary text — the tag set is b/i/u/s/code/pre/a
+# and none of them take a colour. Emoji carry the colour instead, and render the
+# same on every client. Rising particulates are bad, so up is red.
+#
+# Squares, not circles: circles are the air-quality *level* (🟢🟠🔴), and a red
+# circle beside a value would read as "high" rather than "rising". The arrow
+# repeats the direction, so the colour is never carrying it alone.
+TREND_UP = "🟥"
+TREND_DOWN = "🟩"
+
+
 def trend(current: float, previous: float | None, *, deadband: float = 0.05) -> str:
     """Direction against an earlier reading. Rising particulates read as bad."""
     if previous is None or previous <= 0:
@@ -60,8 +71,8 @@ def trend(current: float, previous: float | None, *, deadband: float = 0.05) -> 
     change = (current - previous) / previous
     if abs(change) < deadband:
         return "→ steady"
-    arrow = "↑" if change > 0 else "↓"
-    return f"{arrow} {abs(change) * 100:.0f}%"
+    marker, arrow = (TREND_UP, "↑") if change > 0 else (TREND_DOWN, "↓")
+    return f"{marker} {arrow} {abs(change) * 100:.0f}%"
 
 
 def relative_time(then: datetime, now: datetime | None = None) -> str:
@@ -96,18 +107,23 @@ def format_status_card(
     pm25_trend = trend(pm25, pm25_before)
     pm10_trend = trend(pm10, pm10_before)
 
-    lines = [
-        f"<b>{level.emoji} Air quality — {headline}</b>",
-        "<pre>",
+    # No newline straight after <pre>: Telegram would render a blank first line.
+    body = [
         f"PM2.5  {meter(pm25, thresholds.pm25_err)}  {pm25:>5.1f}  {pm25_trend}".rstrip(),
         f"PM10   {meter(pm10, thresholds.pm10_err)}  {pm10:>5.1f}  {pm10_trend}".rstrip(),
     ]
     if spark:
-        lines += ["", f"last hour  {sparkline(spark)}"]
-    lines += ["</pre>", f"<i>updated {relative_time(observed_at, now)}</i>"]
+        body += ["", f"last hour  {sparkline(spark)}"]
+
+    footer = f"updated {relative_time(observed_at, now)}"
     if pm25_trend or pm10_trend:
-        lines[-1] = f"<i>updated {relative_time(observed_at, now)} · change vs 1h ago</i>"
-    return "\n".join(lines)
+        footer += " · change vs 1h ago"
+
+    return (
+        f"<b>{level.emoji} Air quality — {headline}</b>\n"
+        f"<pre>{chr(10).join(body)}</pre>\n"
+        f"<i>{footer}</i>"
+    )
 
 
 def format_stale_card(observed_at: datetime, expected_every: int,
@@ -184,6 +200,19 @@ def info_text(thresholds: Thresholds) -> str:
         "<b>Reading the chart</b>",
         "• Each pollutant gets its own pane and its own limits.",
         "• Amber band = above warn, red band = above high.",
+        "• The number on the right is the latest reading.",
+        "• On <b>7d</b> the solid line is a ~1h average; the faint dots are the raw readings.",
+        "",
+        "<b>Reading 🗓 Patterns</b>",
+        "• One row per day, one column per hour of the day.",
+        "• Each cell is the <b>average PM2.5</b> for that hour.",
+        "• Darker = dirtier air. The scale is on the right.",
+        "<pre>      00    06    12    18",
+        "Mon  ░░░░  ▓▓░░  ░░▓░  ▓▓▓░</pre>",
+        "• Read it <i>down a column</i>: a dark column means that hour is",
+        "  reliably bad — cooking, traffic, or an open window.",
+        "• Read it <i>across a row</i> to compare one day with the rest.",
+        "• Pale cells at the top or bottom edge are partial days, not clean air.",
         "",
         "<b>Tips</b>",
         "• Readings stabilize after 5–10 min warm-up.",

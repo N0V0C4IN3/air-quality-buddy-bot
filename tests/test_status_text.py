@@ -5,7 +5,8 @@ import pytest
 
 from common.air_quality import Level, Thresholds
 from html_helpers import (
-    format_stale_card, format_status_card, meter, relative_time, sparkline, trend,
+    TREND_DOWN, TREND_UP, format_stale_card, format_status_card, info_text, meter,
+    relative_time, sparkline, trend,
 )
 
 AT = datetime(2026, 8, 27, 18, 0, tzinfo=timezone.utc)
@@ -66,11 +67,45 @@ def test_sparkline_handles_a_single_reading():
 # ---------- trend ----------
 
 def test_trend_reports_a_rise():
-    assert trend(120, 100) == "↑ 20%"
+    assert trend(120, 100) == f"{TREND_UP} ↑ 20%"
 
 
 def test_trend_reports_a_fall():
-    assert trend(80, 100) == "↓ 20%"
+    assert trend(80, 100) == f"{TREND_DOWN} ↓ 20%"
+
+
+def test_trend_markers_do_not_collide_with_the_level_emoji():
+    """Circles mean air-quality level; the trend uses squares so a red marker
+    beside a value never reads as 'high'."""
+    for level in Level:
+        assert level.emoji not in (TREND_UP, TREND_DOWN)
+
+
+def test_the_card_never_repeats_the_level_emoji_as_a_trend():
+    text = card(level=Level.ERR, pm25=99.0, pm25_before=50.0)
+    assert text.count(Level.ERR.emoji) == 1
+
+
+def test_rising_particulates_are_red_and_falling_are_green():
+    """Telegram HTML cannot colour text, so the emoji carries the colour."""
+    assert TREND_UP == "🟥" and TREND_DOWN == "🟩"
+    assert TREND_UP in trend(120, 100)
+    assert TREND_DOWN in trend(80, 100)
+    assert TREND_UP not in trend(80, 100)
+
+
+def test_steady_carries_no_colour():
+    assert TREND_UP not in trend(102, 100)
+    assert TREND_DOWN not in trend(102, 100)
+
+
+def test_card_colours_each_pollutant_independently():
+    text = card(pm25=20.0, pm10=10.0, pm25_before=10.0, pm10_before=20.0)
+    pm25_line = next(l for l in text.splitlines() if "PM2.5" in l)
+    pm10_line = next(l for l in text.splitlines() if l.lstrip().startswith("PM10"))
+
+    assert TREND_UP in pm25_line and TREND_DOWN not in pm25_line
+    assert TREND_DOWN in pm10_line and TREND_UP not in pm10_line
 
 
 def test_small_changes_read_as_steady():
@@ -136,6 +171,12 @@ def test_card_without_history_omits_the_trend():
     assert "12.4" in text
 
 
+def test_card_has_no_blank_first_line_in_the_block():
+    """A newline straight after <pre> renders as an empty row in Telegram."""
+    assert "<pre>" + chr(10) not in card()
+    assert card().split("<pre>")[1].startswith("PM2.5")
+
+
 def test_card_is_valid_telegram_html():
     text = card()
     assert text.count("<pre>") == text.count("</pre>") == 1
@@ -155,3 +196,33 @@ def test_stale_card_says_how_long_it_has_been_quiet():
 def test_stale_card_shows_the_last_seen_clock():
     text = format_stale_card(AT, 300, AT + timedelta(hours=2))
     assert "18:00" in text
+
+
+# ---------- info ----------
+
+def test_info_explains_how_to_read_the_patterns_heatmap():
+    text = info_text(T)
+    assert "Patterns" in text
+    assert "hour" in text.lower()
+    assert "Darker" in text or "darker" in text
+
+
+def test_info_explains_the_chart_bands():
+    text = info_text(T)
+    assert "Amber band" in text and "red band" in text
+
+
+def test_info_states_the_configured_thresholds():
+    text = info_text(Thresholds(pm25_warn=12, pm10_warn=22, pm25_err=32, pm10_err=42))
+    assert "12.0" in text and "42.0" in text
+
+
+def test_info_fits_a_single_telegram_message():
+    """Telegram rejects a text message over 4096 characters."""
+    assert len(info_text(T)) <= 4096
+
+
+def test_info_is_valid_telegram_html():
+    text = info_text(T)
+    for tag in ("b", "i", "pre"):
+        assert text.count(f"<{tag}>") == text.count(f"</{tag}>"), tag
