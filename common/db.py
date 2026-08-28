@@ -5,8 +5,7 @@ from typing import Iterable, Optional
 from datetime import datetime
 
 from sqlalchemy import (
-    create_engine, Column, String, Float, DateTime, BigInteger, Boolean,
-    func, Index
+    create_engine, String, Float, DateTime, BigInteger, Boolean, Integer, func
 )
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column
 
@@ -20,7 +19,11 @@ class Base(DeclarativeBase):
 class Reading(Base):
     __tablename__ = "readings"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # SQLite only autoincrements an INTEGER primary key, so the tests get that
+    # variant; Postgres still gets BIGSERIAL.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
     pm25: Mapped[float] = mapped_column(Float, nullable=False)          # μg/m³
     pm10: Mapped[float] = mapped_column(Float, nullable=False)          # μg/m³
 
@@ -139,11 +142,12 @@ class ChatRepository:
             for chat in self.session.query(Chat).filter_by(is_subscribed=True).all()
         ]
 
-    def upsert(self, chat_id: str, is_subscribed: bool):
+    def upsert(self, chat_id: str, is_subscribed: bool) -> Chat:
+        """Does not commit; the owning `Database.session()` block does."""
         chat = self.session.query(Chat).filter_by(chat_id=str(chat_id)).first()
         if chat:
             chat.is_subscribed = is_subscribed
         else:
             chat = Chat(chat_id=str(chat_id), is_subscribed=is_subscribed)
             self.session.add(chat)
-        self.session.commit()
+        return chat

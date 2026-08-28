@@ -12,6 +12,13 @@
 - Housekeeper to prune old data
 - Timezone-aware charts
 
+## Tests
+No services required — the suite runs against SQLite, an in-memory cache and a fake serial port:
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest
+```
+
 ## Setup
 To start all services, run this command in root directory:
 ```bash
@@ -21,7 +28,10 @@ To start a separate service, run:
 ```bash
 docker compose up --build db service-name -d
 ```
-Create the .env file in the root directory, example:
+Create the .env file in the root directory. Every service parses its whole
+environment at boot, so a missing required value fails the container
+immediately rather than on the first query or alert.
+
 ```bash
 TELEGRAM_TOKEN=telegram bot token 
 DATABASE_URL=db url
@@ -35,10 +45,24 @@ PM10_WARN=50
 PM25_ERR=75
 PM10_ERR=100
 
+# broker (required by sensor-reader and reporter-bot)
+RABBITMQ_HOST=rabbitmq
+RABBITMQ_PORT=5672
+RABBITMQ_USER=guest
+RABBITMQ_PASS=guest
+AQ_EXCHANGE=aq.alerts
+AMQP_URL=amqp://guest:guest@rabbitmq:5672/
+AQ_QUEUE_REPORTER=reporter-bot-alerts
+# optional: defaults to the alerts.warn + alerts.err bindings
+# AQ_ROUTING_KEYS=alerts.warn,alerts.err
+
+# cache (required by reporter-bot)
+REDIS_HOST=redis
+REDIS_PORT=6379
+
 # bot setup
 ENABLE_ALERTS=true
-ALERT_CHECK_SECONDS=300
-ALERT_COOLDOWN_SECONDS=1800
+ALERT_COOLDOWN_SECONDS=1800   # same level stays quiet for this long; warn->err always gets through
 
 # housekeeper setup
 PRUNE_ENABLED=true

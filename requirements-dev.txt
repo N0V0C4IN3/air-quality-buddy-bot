@@ -1,0 +1,11 @@
+# Everything the test suite needs. No Postgres, Redis, RabbitMQ or sensor
+# required: the tests run against SQLite, an in-memory cache and fake serial.
+#   python -m pip install -r requirements-dev.txt
+#   python -m pytest
+pytest>=8.0
+sqlalchemy==2.0.32
+pandas>=2.2
+matplotlib>=3.9
+pyserial==3.5
+redis
+tzdata          # Windows has no system tz database

@@ -1,11 +1,18 @@
 # sensor.py
+"""SDS011 serial adapter for the `Sampler` seam.
+
+Frame scanning and parsing stay pure functions; the adapter owns the
+wake -> warm up -> read N -> sleep cycle and nothing else.
+"""
+from __future__ import annotations
+
 import logging
-import random
 import time
-from typing import Tuple, Optional, List
+from typing import List, Optional, Tuple
 
 import serial  # from pyserial
-from config import settings
+
+from sampler import Sample
 
 log = logging.getLogger(__name__)
 
@@ -14,6 +21,7 @@ SDS011 frames (data):
   AA C0 pm25_lo pm25_hi pm10_lo pm10_hi id_lo id_hi chk AB
   Values are reported in 0.1 μg/m³.
 """
+
 
 def _read_frame(ser: serial.Serial, timeout_s: float = 2.0) -> Optional[bytes]:
     """Scan for a valid AA C0 ... AB frame; return None on timeout."""
@@ -37,6 +45,7 @@ def _read_frame(ser: serial.Serial, timeout_s: float = 2.0) -> Optional[bytes]:
             continue
         return frame
 
+
 def _parse_frame(frame: bytes) -> Optional[Tuple[float, float]]:
     if len(frame) != 10 or frame[0] != 0xAA or frame[1] != 0xC0 or frame[9] != 0xAB:
         return None
@@ -46,45 +55,43 @@ def _parse_frame(frame: bytes) -> Optional[Tuple[float, float]]:
     pm10_raw = int.from_bytes(frame[4:6], byteorder="little")
     return (pm25_raw / 10.0, pm10_raw / 10.0)
 
-class SensorReader:
+
+class SerialSampler:
     """
     Each call to read():
       1) Wake sensor (WORK=1)
       2) Ensure ACTIVE reporting & period=0 (continuous)
       3) Warm up for N seconds
-      4) Read one valid frame (with retries), discarding all-zero warm-up frames
-      5) Put sensor back to SLEEP
+      4) Read N valid frames (with retries), discarding all-zero warm-up frames
+      5) Average them and put the sensor back to SLEEP
     """
 
     def __init__(
         self,
+        *,
+        port: str,
+        baud: int = 9600,
         warmup_seconds: float = 3.0,
         read_timeout_s: float = 2.0,
         retries: int = 8,
         persist_cfg: bool = False,   # session-only changes (no EEPROM wear)
         ignore_zero_frames: bool = True,
-        extra_settle_s: float = 2.0, # wait a bit before retry when 0,0 is seen
-        number_of_readings_per_session: int = 10,
-        interval_between_readings: int = 2
+        extra_settle_s: float = 2.0,  # wait a bit before retry when 0,0 is seen
+        readings_per_session: int = 10,
+        interval_between_readings: float = 2,
     ) -> None:
-        self._mock = settings.dry_run or (settings.sds011_port is None)
-        self._ser: Optional[serial.Serial] = None
         self.warmup_seconds = warmup_seconds
         self.read_timeout_s = read_timeout_s
         self.retries = max(1, retries)
         self.persist_cfg = persist_cfg
         self.ignore_zero_frames = ignore_zero_frames
         self.extra_settle_s = max(0.0, extra_settle_s)
-        self.number_of_readings_per_session = number_of_readings_per_session
+        self.readings_per_session = max(1, readings_per_session)
         self.interval_between_readings = interval_between_readings
 
-        if self._mock:
-            log.info("SensorReader: DRY_RUN or no port configured; generating mock values.")
-            return
-
         self._ser = serial.Serial(
-            port=settings.sds011_port,
-            baudrate=settings.sds011_baud,
+            port=port,
+            baudrate=baud,
             bytesize=8,
             parity="N",
             stopbits=1,
@@ -100,9 +107,8 @@ class SensorReader:
             pass
 
         log.info(
-            "SensorReader: opened port=%s baud=%s warmup=%.1fs timeout=%.1fs retries=%d persist_cfg=%s",
-            settings.sds011_port, settings.sds011_baud, self.warmup_seconds,
-            self.read_timeout_s, self.retries, self.persist_cfg
+            "SerialSampler: opened port=%s baud=%s warmup=%.1fs timeout=%.1fs retries=%d persist_cfg=%s",
+            port, baud, self.warmup_seconds, self.read_timeout_s, self.retries, self.persist_cfg
         )
 
     # ---------- command helpers (19-byte AA B4 ... frames) ----------
@@ -115,8 +121,6 @@ class SensorReader:
         return bytes(frame + [chk, 0xAB])
 
     def _send_cmd(self, payload: List[int], label: str) -> None:
-        if self._ser is None:
-            return
         frame = self._build_cmd(payload)
         if log.isEnabledFor(logging.DEBUG):
             log.debug("%s → %s", label, frame.hex(" "))
@@ -149,13 +153,7 @@ class SensorReader:
 
     # ---------------- reading cycle ----------------
 
-    def read(self) -> Tuple[float, float]:
-        if self._mock or self._ser is None:
-            pm25 = max(0.0, random.gauss(8, 3))
-            pm10 = max(0.0, random.gauss(12, 4))
-            log.debug("Mock reading: PM2.5=%.1f PM10=%.1f", pm25, pm10)
-            return (round(pm25, 1), round(pm10, 1))
-
+    def read(self) -> Sample:
         try:
             self._wake()
             self._set_period(0)
@@ -166,51 +164,18 @@ class SensorReader:
             time.sleep(self.warmup_seconds)
 
             for attempt in range(1, self.retries + 1):
-                pm25_readings = []
-                pm10_readings = []
-                is_successfull_attempt = True
-                for reading_no in range(1, self.number_of_readings_per_session + 1):
-                    frame = _read_frame(self._ser, timeout_s=self.read_timeout_s)
-                    if not frame:
-                        log.debug("Start attempt %d/%d, reading # %d: timeout/no frame", attempt, self.retries, reading_no)
-                        is_successfull_attempt = False
-                        break
-
-                    if log.isEnabledFor(logging.DEBUG):
-                        log.debug("C0 frame: %s", frame.hex(" "))
-
-                    parsed = _parse_frame(frame)
-                    if not parsed:
-                        log.debug("Read attempt %d/%d, reading # %d: bad frame: %s", attempt, self.retries, frame.hex(" "), reading_no)
-                        is_successfull_attempt = False
-                        break
-
-                    pm25, pm10 = parsed
-
-                    # discard initial 0/0 frames if requested
-                    if self.ignore_zero_frames and pm25 == 0.0 and pm10 == 0.0:
-                        log.info("Discarded zero frame (attempt %d/%d); settling for %.1fs…",
-                                attempt, self.retries, self.extra_settle_s)
-                        time.sleep(self.extra_settle_s)
-                        is_successfull_attempt = False
-                        break
-
-                    log.info("Adding SDS011 data: PM2.5=%.1f µg/m³, PM10=%.1f µg/m³, reading # %d", pm25, pm10, reading_no)
-
-                    pm25_readings.append(pm25)
-                    pm10_readings.append(pm10)
-                    
-                    time.sleep(self.interval_between_readings)
-                
-                if not is_successfull_attempt:
+                readings = self._collect_session(attempt)
+                if readings is None:
                     continue
 
-                pm25_mean = sum(pm25_readings) / self.number_of_readings_per_session
-                pm10_mean = sum(pm10_readings) / self.number_of_readings_per_session
+                pm25_mean = sum(r[0] for r in readings) / len(readings)
+                pm10_mean = sum(r[1] for r in readings) / len(readings)
 
-                log.info("SDS011 data: PM2.5=%.1f µg/m³, PM10=%.1f µg/m³, number of redings: %d", pm25_mean, pm10_mean, self.number_of_readings_per_session)
-                
-                return (round(pm25_mean, 1), round(pm10_mean, 1))
+                log.info(
+                    "SDS011 data: PM2.5=%.1f µg/m³, PM10=%.1f µg/m³, number of readings: %d",
+                    pm25_mean, pm10_mean, len(readings)
+                )
+                return Sample.clean(pm25_mean, pm10_mean)
 
             raise RuntimeError("Failed to read/parse SDS011 frame")
         finally:
@@ -218,3 +183,48 @@ class SensorReader:
                 self._sleep()
             except Exception as e:
                 log.warning("SDS011: failed to send SLEEP in finally: %s", e)
+
+    def _collect_session(self, attempt: int) -> Optional[List[Tuple[float, float]]]:
+        """One full session of readings, or None if the attempt should be retried."""
+        readings: List[Tuple[float, float]] = []
+
+        for reading_no in range(1, self.readings_per_session + 1):
+            frame = _read_frame(self._ser, timeout_s=self.read_timeout_s)
+            if not frame:
+                log.debug("Attempt %d/%d, reading #%d: timeout/no frame",
+                          attempt, self.retries, reading_no)
+                return None
+
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("C0 frame: %s", frame.hex(" "))
+
+            parsed = _parse_frame(frame)
+            if not parsed:
+                log.debug("Attempt %d/%d, reading #%d: bad frame: %s",
+                          attempt, self.retries, reading_no, frame.hex(" "))
+                return None
+
+            pm25, pm10 = parsed
+
+            # discard initial 0/0 frames if requested
+            if self.ignore_zero_frames and pm25 == 0.0 and pm10 == 0.0:
+                log.info("Discarded zero frame (attempt %d/%d); settling for %.1fs…",
+                         attempt, self.retries, self.extra_settle_s)
+                time.sleep(self.extra_settle_s)
+                return None
+
+            log.info("Adding SDS011 data: PM2.5=%.1f µg/m³, PM10=%.1f µg/m³, reading #%d",
+                     pm25, pm10, reading_no)
+            readings.append((pm25, pm10))
+
+            if reading_no < self.readings_per_session:
+                time.sleep(self.interval_between_readings)
+
+        return readings
+
+    def close(self) -> None:
+        try:
+            if self._ser and self._ser.is_open:
+                self._ser.close()
+        except Exception as e:
+            log.warning("SDS011: failed to close serial port: %s", e)
