@@ -9,8 +9,9 @@ from common.db import Database
 from config import settings
 from consumer import AsyncConsumer
 from html_helpers import info_text
-from markup import main_menu_markup
-from reports import ReadingReports, Window
+import callbacks
+from markup import main_menu_markup, window_markup
+from reports import ReadingReports, Report, Window
 from subscriber_cache import RedisSubscriberCache
 from subscriptions import Subscriptions
 
@@ -26,20 +27,35 @@ dp = Dispatcher(bot)
 # One engine for the process; handlers borrow sessions from it.
 db = Database(url=settings.database_url)
 subs = Subscriptions(db, RedisSubscriberCache(settings.redis_host, settings.redis_port))
-reports = ReadingReports(db, settings.tz, settings.thresholds)
+reports = ReadingReports(
+    db, settings.tz, settings.thresholds,
+    reading_interval_seconds=settings.reading_interval_seconds,
+)
 
 
 def menu(chat_id: int):
     return main_menu_markup(subs.is_subscribed(chat_id))
 
 
-async def send_report(message: types.Message, window: Window) -> None:
-    report = reports.for_window(window)
-    await message.answer(
-        report.text, reply_markup=menu(message.chat.id), disable_web_page_preview=True
+def _photo(report: Report) -> types.InputFile:
+    report.chart.seek(0)
+    return types.InputFile(report.chart, filename=report.chart.name)
+
+
+async def send_window(message: types.Message, window: Window) -> None:
+    """Send a chart card: one message carrying the chart, its stats and the buttons."""
+    theme = subs.theme(message.chat.id)
+    report = reports.for_window(window, theme=theme)
+
+    if report.is_empty:
+        await message.answer(report.text, reply_markup=menu(message.chat.id))
+        return
+
+    await message.answer_photo(
+        photo=_photo(report),
+        caption=report.text,
+        reply_markup=window_markup(window, theme=theme),
     )
-    if report.chart:
-        await message.answer_photo(photo=report.chart)
 
 
 # start shows menu
@@ -51,31 +67,78 @@ async def start_cmd(message: types.Message):
 # 📟 Status
 @dp.message_handler(lambda m: m.text == "📟 Status")
 async def status_handler(message: types.Message):
-    block = reports.latest()
-    if not block:
+    report = reports.status_report(theme=subs.theme(message.chat.id))
+    if report is None:
         await message.answer("No readings yet.", reply_markup=menu(message.chat.id))
         return
-    await message.answer(
-        block, reply_markup=menu(message.chat.id), disable_web_page_preview=True
+    if report.is_empty:                      # sensor quiet — nothing to draw
+        await message.answer(
+            report.text, reply_markup=menu(message.chat.id),
+            disable_web_page_preview=True,
+        )
+        return
+    await message.answer_photo(
+        photo=_photo(report),
+        caption=report.text,
+        reply_markup=menu(message.chat.id),
     )
 
 
 # 📅 Today
 @dp.message_handler(lambda m: m.text == "📅 Today")
 async def today_handler(message: types.Message):
-    await send_report(message, Window.TODAY)
+    await send_window(message, Window.TODAY)
 
 
 # 🕒 Last 12h
 @dp.message_handler(lambda m: m.text == "🕒 Last 12h")
 async def last12_handler(message: types.Message):
-    await send_report(message, Window.LAST_12H)
+    await send_window(message, Window.LAST_12H)
 
 
 # 📈 Last 7d
 @dp.message_handler(lambda m: m.text == "📈 Last 7d")
 async def last7_handler(message: types.Message):
-    await send_report(message, Window.LAST_7D)
+    await send_window(message, Window.LAST_7D)
+
+
+# 🗓 Patterns (hour-of-day heatmap)
+@dp.message_handler(lambda m: m.text in ["🗓 Patterns", "Patterns"])
+async def patterns_handler(message: types.Message):
+    await send_window(message, Window.PATTERNS)
+
+
+# ---- inline keyboard: re-render the same card in place ----
+
+async def _swap_card(call: types.CallbackQuery, window: Window, theme: str) -> None:
+    report = reports.for_window(window, theme=theme)
+    if report.is_empty:
+        await call.answer(report.text, show_alert=True)
+        return
+
+    await bot.edit_message_media(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        media=types.InputMediaPhoto(
+            _photo(report), caption=report.text, parse_mode="HTML"
+        ),
+        reply_markup=window_markup(window, theme=theme),
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith(f"{callbacks.WINDOW}:"))
+async def window_callback(call: types.CallbackQuery):
+    _, window = callbacks.decode(call.data)
+    await call.answer()
+    await _swap_card(call, window, subs.theme(call.message.chat.id))
+
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith(f"{callbacks.THEME}:"))
+async def theme_callback(call: types.CallbackQuery):
+    _, window = callbacks.decode(call.data)
+    theme = subs.toggle_theme(call.message.chat.id)
+    await call.answer(f"{theme.capitalize()} charts")
+    await _swap_card(call, window, theme)
 
 
 # 🔔 Subscribe / Unsubscribe

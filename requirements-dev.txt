@@ -8,4 +8,6 @@ pandas>=2.2
 matplotlib>=3.9
 pyserial==3.5
 redis
+alembic         # tests/test_migrations.py runs the real migration scripts
+python-dotenv   # alembic/env.py imports it
 tzdata          # Windows has no system tz database

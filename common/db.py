@@ -43,6 +43,11 @@ class Chat(Base):
 
     chat_id: Mapped[str] = mapped_column(String, primary_key=True)
     is_subscribed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Telegram never tells a bot which theme the viewer uses, so charts are
+    # rendered to a stored per-chat preference: "light" or "dark".
+    chart_theme: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="light", server_default="light"
+    )
 
 # ---------- Database / Unit of Work ----------
 class Database:
@@ -144,10 +149,23 @@ class ChatRepository:
 
     def upsert(self, chat_id: str, is_subscribed: bool) -> Chat:
         """Does not commit; the owning `Database.session()` block does."""
+        chat = self._get_or_create(chat_id)
+        chat.is_subscribed = is_subscribed
+        return chat
+
+    def get_theme(self, chat_id: str) -> str:
         chat = self.session.query(Chat).filter_by(chat_id=str(chat_id)).first()
-        if chat:
-            chat.is_subscribed = is_subscribed
-        else:
-            chat = Chat(chat_id=str(chat_id), is_subscribed=is_subscribed)
+        return chat.chart_theme if chat else "light"
+
+    def set_theme(self, chat_id: str, theme: str) -> Chat:
+        """Does not commit; the owning `Database.session()` block does."""
+        chat = self._get_or_create(chat_id)
+        chat.chart_theme = theme
+        return chat
+
+    def _get_or_create(self, chat_id: str) -> Chat:
+        chat = self.session.query(Chat).filter_by(chat_id=str(chat_id)).first()
+        if chat is None:
+            chat = Chat(chat_id=str(chat_id), is_subscribed=False)
             self.session.add(chat)
         return chat
