@@ -67,12 +67,20 @@ async def start_cmd(message: types.Message):
 # 📟 Status
 @dp.message_handler(lambda m: m.text == "📟 Status")
 async def status_handler(message: types.Message):
-    text = reports.status_text()
-    if not text:
+    report = reports.status_report(theme=subs.theme(message.chat.id))
+    if report is None:
         await message.answer("No readings yet.", reply_markup=menu(message.chat.id))
         return
-    await message.answer(
-        text, reply_markup=menu(message.chat.id), disable_web_page_preview=True
+    if report.is_empty:                      # sensor quiet — nothing to draw
+        await message.answer(
+            report.text, reply_markup=menu(message.chat.id),
+            disable_web_page_preview=True,
+        )
+        return
+    await message.answer_photo(
+        photo=_photo(report),
+        caption=report.text,
+        reply_markup=menu(message.chat.id),
     )
 
 

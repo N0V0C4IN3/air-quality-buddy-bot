@@ -22,13 +22,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Rectangle
 
 from common.air_quality import Thresholds
 
 # Reserved status hues — never used for a series.
+BAND_OK = "#2e9e6b"
 BAND_WARN = "#fab219"
 BAND_HIGH = "#d03b3b"
 BAND_ALPHA = 0.13
+
+# The level word and hue for the status card. Matplotlib's bundled font has no
+# colour emoji, so the card draws a dot and always names the level in words.
+LEVEL_STYLE = {
+    "ok": ("Good", BAND_OK),
+    "warn": ("Elevated", BAND_WARN),
+    "err": ("High", BAND_HIGH),
+}
 
 # Sequential single-hue ramp for the heatmap (light -> dark).
 SEQUENTIAL = [
@@ -121,6 +131,86 @@ def _smooth(values: np.ndarray, window: int) -> np.ndarray:
     return smoothed
 
 
+# ---------------- stats footer ----------------
+
+# Where each column sits in the footer axis (0 = left edge, 1 = right edge).
+# Numbers are right-aligned on these, so the decimal points stack whatever the
+# magnitude — the reason the table moved out of a Telegram <pre> block.
+COL_X = {"label": 0.0, "min": 0.46, "avg": 0.63, "max": 0.80, "peak": 1.0}
+
+
+@dataclass(frozen=True)
+class StatRow:
+    """One pollutant's summary, already rendered to strings."""
+    label: str
+    minimum: str
+    average: str
+    maximum: str
+    peak: str          # "ok" / "warn" / "high" — the word, not just the colour
+    colour: str        # status hue for the peak, or None-ish muted
+
+    @property
+    def cells(self) -> tuple[str, str, str, str]:
+        return self.minimum, self.average, self.maximum, self.peak
+
+
+def stats_rows(df: pd.DataFrame, thresholds: Thresholds,
+               palette: Palette = LIGHT) -> list[StatRow]:
+    """min / avg / max per pollutant, plus where the peak landed.
+
+    Pure and string-valued so the table can be tested without rendering a PNG.
+    The peak is named in words as well as coloured — colour never carries
+    meaning alone.
+    """
+    rows = []
+    for label, key, warn, high in (
+        ("PM2.5", "pm25", thresholds.pm25_warn, thresholds.pm25_err),
+        ("PM10", "pm10", thresholds.pm10_warn, thresholds.pm10_err),
+    ):
+        values = df[key].astype(float)
+        top = float(values.max())
+        if top >= high:
+            peak, colour = "high", BAND_HIGH
+        elif top >= warn:
+            peak, colour = "warn", BAND_WARN
+        else:
+            peak, colour = "ok", palette.muted
+        rows.append(StatRow(
+            label=label,
+            minimum=f"{float(values.min()):.1f}",
+            average=f"{float(values.mean()):.1f}",
+            maximum=f"{top:.1f}",
+            peak=peak,
+            colour=colour,
+        ))
+    return rows
+
+
+def _stats_footer(ax, rows: list[StatRow], p: Palette, *, samples: int) -> None:
+    """Draw the summary table into its own axis — real type, no code block."""
+    ax.set_axis_off()
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    headers = ("min", "avg", "max", "peak")
+    for name in headers:
+        ax.text(COL_X[name], 0.86, name, ha="right", va="center",
+                color=p.muted, fontsize=8.5)
+    ax.text(COL_X["label"], 0.86, f"{samples} samples · µg/m³", ha="left",
+            va="center", color=p.muted, fontsize=8.5)
+    ax.axhline(0.66, color=p.grid, linewidth=1)
+
+    for i, row in enumerate(rows):
+        y = 0.42 - i * 0.32
+        ax.text(COL_X["label"], y, row.label, ha="left", va="center",
+                color=p.ink_2, fontsize=9.5, fontweight="bold")
+        for name, value in zip(headers, row.cells):
+            emphasis = name in ("avg", "peak")
+            ax.text(COL_X[name], y, value, ha="right", va="center",
+                    color=row.colour if name == "peak" else p.ink,
+                    fontsize=9.5, fontweight="bold" if emphasis else "normal")
+
+
 def _to_png(fig) -> BytesIO:
     bio = BytesIO()
     fig.savefig(bio, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
@@ -153,10 +243,12 @@ def window_chart(
     frame = df.sort_values("timestamp")
     times = _local_times(frame, tz)
 
-    fig, axes = plt.subplots(
-        2, 1, figsize=(7, 4.6), dpi=150, sharex=True,
-        facecolor=p.surface, gridspec_kw={"hspace": 0.32},
-    )
+    fig = plt.figure(figsize=(7, 5.4), dpi=150, facecolor=p.surface)
+    gs = fig.add_gridspec(3, 1, height_ratios=[1, 1, 0.42], hspace=0.32)
+    axes = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
+    footer = fig.add_subplot(gs[2])
+    axes[1].sharex(axes[0])
+    axes[0].tick_params(labelbottom=False)
 
     panes = (
         (axes[0], frame["pm25"].to_numpy(float), p.pm25, "PM2.5",
@@ -194,13 +286,160 @@ def window_chart(
 
     _time_axis(axes[1], times, tz, multiday=multiday)
     axes[0].set_xlim(*_span(times))
+    _stats_footer(footer, stats_rows(frame, thresholds, p), p, samples=len(frame))
     fig.suptitle(title, color=p.ink, fontsize=12, fontweight="bold",
                  x=0.125, ha="left", y=0.99)
 
     return _to_png(fig)
 
 
+# ---------------- status card ----------------
+
+BAR_X0, BAR_X1 = 0.34, 0.64      # where the level bar starts and ends
+BAR_HEIGHT = 0.05
+
+
+def _level_of(value: float, warn: float, high: float) -> tuple[str, str]:
+    if value >= high:
+        return "High", BAND_HIGH
+    if value >= warn:
+        return "Elevated", BAND_WARN
+    return "Good", BAND_OK
+
+
+def trend_text(current: float, previous: Optional[float], *,
+               deadband: float = 0.05) -> str:
+    """Direction against an earlier reading, in glyphs the PNG font has.
+
+    The text card uses coloured squares for this; a PNG can draw the arrow
+    itself, and the word still repeats the direction.
+    """
+    if previous is None or previous <= 0:
+        return ""
+    change = (current - previous) / previous
+    if abs(change) < deadband:
+        return "→ steady"
+    arrow = "↑" if change > 0 else "↓"
+    return f"{arrow} {abs(change) * 100:.0f}% vs 1h ago"
+
+
+def status_card(
+    *,
+    pm25: float,
+    pm10: float,
+    level: str,
+    thresholds: Thresholds,
+    freshness: str,
+    spark: Optional[list] = None,
+    pm25_before: Optional[float] = None,
+    pm10_before: Optional[float] = None,
+    palette: Palette = LIGHT,
+) -> BytesIO:
+    """The latest reading as a card: level, magnitude, direction, freshness.
+
+    Replaces the ▓░ meter that Telegram rendered in a <pre> block. The bar runs
+    from zero to the *high* threshold with the warn limit marked, so the value
+    is placed against its own limits rather than against the other pollutant's.
+    """
+    p = palette
+    headline, level_colour = LEVEL_STYLE.get(level, LEVEL_STYLE["ok"])
+
+    fig = plt.figure(figsize=(7, 2.9), dpi=150, facecolor=p.surface)
+    ax = fig.add_axes([0.04, 0.04, 0.92, 0.92])
+    ax.set_axis_off()
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    ax.plot([0.012], [0.93], marker="o", markersize=11, color=level_colour,
+            clip_on=False)
+    ax.text(0.045, 0.93, f"Air quality — {headline.lower()}", ha="left",
+            va="center", color=p.ink, fontsize=15, fontweight="bold")
+
+    rows = (
+        ("PM2.5", pm25, pm25_before, thresholds.pm25_warn, thresholds.pm25_err),
+        ("PM10", pm10, pm10_before, thresholds.pm10_warn, thresholds.pm10_err),
+    )
+    for i, (label, value, before, warn, high) in enumerate(rows):
+        y = 0.62 - i * 0.26
+        state, colour = _level_of(value, warn, high)
+
+        ax.text(0.0, y, label, ha="left", va="center", color=p.ink_2,
+                fontsize=10, fontweight="bold")
+        ax.text(0.30, y, f"{value:.1f}", ha="right", va="center", color=colour,
+                fontsize=19, fontweight="bold")
+
+        span = BAR_X1 - BAR_X0
+        ax.add_patch(Rectangle((BAR_X0, y - BAR_HEIGHT / 2), span, BAR_HEIGHT,
+                               color=p.grid, linewidth=0, zorder=1))
+        filled = min(1.0, value / high) if high > 0 else 0.0
+        if value > 0:
+            filled = max(filled, 0.012)
+        ax.add_patch(Rectangle((BAR_X0, y - BAR_HEIGHT / 2), span * filled,
+                               BAR_HEIGHT, color=colour, linewidth=0, zorder=2))
+
+        mark = BAR_X0 + span * (warn / high if high > 0 else 0)
+        ax.plot([mark, mark], [y - BAR_HEIGHT, y + BAR_HEIGHT], color=p.surface,
+                linewidth=1.6, zorder=3)
+        ax.text(mark, y + BAR_HEIGHT * 1.4, f"warn {warn:g}", ha="center",
+                va="bottom", color=p.muted, fontsize=7.5)
+        ax.text(BAR_X1, y + BAR_HEIGHT * 1.4, f"high {high:g}", ha="right",
+                va="bottom", color=p.muted, fontsize=7.5)
+
+        # The state word repeats what the bar's colour says.
+        ax.text(0.68, y, state.lower(), ha="left", va="center", color=colour,
+                fontsize=9, fontweight="bold")
+        ax.text(1.0, y, trend_text(value, before), ha="right", va="center",
+                color=p.muted, fontsize=8.5)
+
+    ax.text(0.0, 0.06, freshness, ha="left", va="center", color=p.muted,
+            fontsize=8.5)
+    if spark:
+        _spark_axes(fig, spark, p)
+
+    return _to_png(fig)
+
+
+def _spark_axes(fig, spark: list, p: Palette) -> None:
+    """The last hour as a hairline trace, bottom right of the status card."""
+    values = np.asarray([float(v) for v in spark], dtype=float)
+    ax = fig.add_axes([0.62, 0.06, 0.34, 0.13])
+    ax.set_axis_off()
+    ax.plot(range(len(values)), values, color=p.pm25, linewidth=1.4,
+            solid_capstyle="round")
+    ax.plot([len(values) - 1], [values[-1]], marker="o", markersize=3,
+            color=p.pm25)
+    low, high = float(values.min()), float(values.max())
+    pad = max((high - low) * 0.25, 0.5)
+    ax.set_ylim(low - pad, high + pad)
+    ax.text(0, 1.0, "PM2.5 · last hour", transform=ax.transAxes, ha="left",
+            va="bottom", color=p.muted, fontsize=7.5)
+
+
 # ---------------- hour-of-day heatmap ----------------
+
+@dataclass(frozen=True)
+class HourExtremes:
+    """The hour of day that is reliably dirtiest, and the one that is cleanest."""
+    worst_hour: int
+    worst_value: float
+    best_hour: int
+    best_value: float
+
+    def label(self, which: str) -> str:
+        hour = self.worst_hour if which == "worst" else self.best_hour
+        value = self.worst_value if which == "worst" else self.best_value
+        return f"{hour:02d}:00 · {value:.0f} µg/m³"
+
+
+def hour_extremes(df: pd.DataFrame, tz) -> HourExtremes:
+    """Mean PM2.5 per hour of day, reduced to its two ends. Pure: no render."""
+    local = _local_times(df, tz)
+    by_hour = df.assign(hour=local.dt.hour).groupby("hour")["pm25"].mean()
+    return HourExtremes(
+        worst_hour=int(by_hour.idxmax()), worst_value=float(by_hour.max()),
+        best_hour=int(by_hour.idxmin()), best_value=float(by_hour.min()),
+    )
+
 
 def hour_heatmap(
     df: pd.DataFrame,
@@ -247,5 +486,13 @@ def hour_heatmap(
     bar.outline.set_visible(False)
     bar.ax.tick_params(colors=p.muted, labelsize=8, length=0)
     bar.set_label("µg/m³", color=p.muted, fontsize=8)
+
+    extremes = hour_extremes(frame, tz)
+    for x, which, colour in ((0.0, "worst", BAND_HIGH), (0.46, "best", BAND_OK)):
+        ax.annotate(f"{which} hour", xy=(x, -0.24), xycoords="axes fraction",
+                    ha="left", va="top", color=p.muted, fontsize=8.5)
+        ax.annotate(extremes.label(which), xy=(x + 0.16, -0.24),
+                    xycoords="axes fraction", ha="left", va="top", color=colour,
+                    fontsize=9, fontweight="bold")
 
     return _to_png(fig)

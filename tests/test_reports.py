@@ -101,7 +101,7 @@ def test_report_carries_stats_and_a_png(reports, db):
     assert not report.is_empty
     assert "Today" in report.text
     assert "3 samples" in report.text
-    assert "10.0" in report.text and "30.0" in report.text  # min and max
+    assert "<pre>" not in report.text          # the stats live in the PNG now
     assert report.chart.getvalue().startswith(PNG_MAGIC)
     assert report.chart.name == "today.png"   # slug, stable in callback data
 
@@ -129,7 +129,7 @@ def test_a_reading_just_before_local_midnight_belongs_to_yesterday(reports, db):
 
 def test_status_returns_none_without_readings(reports):
     assert reports.status() is None
-    assert reports.status_text() is None
+    assert reports.status_report() is None
 
 
 def test_status_uses_the_newest_reading(reports, db):
@@ -151,7 +151,6 @@ def test_status_compares_against_an_hour_ago(reports, db):
     view = reports.status(now=now)
 
     assert view.pm25_before == 20.0
-    assert "↓ 50%" in reports.status_text(now=now)
 
 
 def test_status_card_shows_a_sparkline_of_recent_readings(reports, db):
@@ -162,7 +161,6 @@ def test_status_card_shows_a_sparkline_of_recent_readings(reports, db):
 
     view = reports.status(now=now)
     assert view.spark == [5.0, 10.0, 20.0, 40.0]
-    assert "▁" in reports.status_text(now=now)
 
 
 def test_a_quiet_sensor_is_reported_as_quiet(reports, db):
@@ -173,9 +171,10 @@ def test_a_quiet_sensor_is_reported_as_quiet(reports, db):
     view = reports.status(now=now)
     assert view.is_stale(now)
 
-    text = reports.status_text(now=now)
-    assert "Sensor quiet" in text
-    assert "2 h" in text
+    report = reports.status_report(now=now)
+    assert report.is_empty                     # nothing to render for a dead reader
+    assert "Sensor quiet" in report.text
+    assert "2 h" in report.text
 
 
 def test_a_fresh_reading_is_not_stale(reports, db):
@@ -183,7 +182,11 @@ def test_a_fresh_reading_is_not_stale(reports, db):
     add_reading(db, datetime(2026, 8, 27, 9, 58, tzinfo=timezone.utc), pm25=5.0)
 
     assert reports.status(now=now).is_stale(now) is False
-    assert "Sensor quiet" not in reports.status_text(now=now)
+
+    report = reports.status_report(now=now)
+    assert "Sensor quiet" not in report.text
+    assert report.chart.getvalue().startswith(PNG_MAGIC)
+    assert report.chart.name == "status.png"
 
 
 def test_patterns_report_names_the_worst_hour(reports, db):
@@ -196,8 +199,8 @@ def test_patterns_report_names_the_worst_hour(reports, db):
 
     assert not report.is_empty
     assert report.chart.getvalue().startswith(PNG_MAGIC)
-    assert "worst hour" in report.text
-    assert "21:00" in report.text        # 18:00 UTC is 21:00 local
+    assert "Patterns" in report.text
+    assert "<pre>" not in report.text    # worst/best hour are drawn into the PNG
 
 
 def test_status_block_colour_follows_the_configured_thresholds(db):

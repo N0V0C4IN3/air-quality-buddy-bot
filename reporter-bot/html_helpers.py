@@ -1,18 +1,17 @@
 """Telegram HTML formatting.
 
+What is left here is the text that surrounds a PNG: photo captions, the quiet-
+sensor notice and the alert fan-out block. Anything tabular lives in `charts`
+now — Telegram has no table markup, so alignment can only be honest in an image.
+
 No thresholds of its own — the level is decided by `common.air_quality` and
-handed in. Everything here is text, so the status card costs no render and no
-upload.
+handed in.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from common.air_quality import Level, Thresholds
-
-METER_FULL = "▓"
-METER_EMPTY = "░"
-SPARK_TICKS = "▁▂▃▄▅▆▇█"
 
 # Telegram rejects a photo caption over 1024 characters.
 CAPTION_LIMIT = 1024
@@ -26,53 +25,6 @@ def fmt_num(x: float) -> str:
 def fmt_dt(dt_utc: datetime, tz=timezone.utc) -> str:
     # Show local time with timezone
     return dt_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
-
-
-def meter(value: float, ceiling: float, width: int = 10) -> str:
-    """Where a reading sits between zero and its high threshold."""
-    if ceiling <= 0:
-        return METER_EMPTY * width
-    filled = round(max(0.0, min(1.0, value / ceiling)) * width)
-    if value > 0:
-        filled = max(1, filled)          # a real reading always shows something
-    return METER_FULL * filled + METER_EMPTY * (width - filled)
-
-
-def sparkline(values) -> str:
-    """Recent history as one line of block characters."""
-    points = [float(v) for v in values]
-    if not points:
-        return ""
-    low, high = min(points), max(points)
-    if high - low < 1e-9:
-        return SPARK_TICKS[0] * len(points)
-    span = high - low
-    return "".join(
-        SPARK_TICKS[min(len(SPARK_TICKS) - 1, int((v - low) / span * (len(SPARK_TICKS) - 1) + 0.5))]
-        for v in points
-    )
-
-
-# Telegram HTML cannot colour ordinary text — the tag set is b/i/u/s/code/pre/a
-# and none of them take a colour. Emoji carry the colour instead, and render the
-# same on every client. Rising particulates are bad, so up is red.
-#
-# Squares, not circles: circles are the air-quality *level* (🟢🟠🔴), and a red
-# circle beside a value would read as "high" rather than "rising". The arrow
-# repeats the direction, so the colour is never carrying it alone.
-TREND_UP = "🟥"
-TREND_DOWN = "🟩"
-
-
-def trend(current: float, previous: float | None, *, deadband: float = 0.05) -> str:
-    """Direction against an earlier reading. Rising particulates read as bad."""
-    if previous is None or previous <= 0:
-        return ""
-    change = (current - previous) / previous
-    if abs(change) < deadband:
-        return "→ steady"
-    marker, arrow = (TREND_UP, "↑") if change > 0 else (TREND_DOWN, "↓")
-    return f"{marker} {arrow} {abs(change) * 100:.0f}%"
 
 
 def relative_time(then: datetime, now: datetime | None = None) -> str:
@@ -90,42 +42,6 @@ def relative_time(then: datetime, now: datetime | None = None) -> str:
     return f"{hours // 24} d ago"
 
 
-def format_status_card(
-    *,
-    pm25: float,
-    pm10: float,
-    level: Level,
-    observed_at: datetime,
-    thresholds: Thresholds,
-    spark: list[float] | None = None,
-    pm25_before: float | None = None,
-    pm10_before: float | None = None,
-    now: datetime | None = None,
-) -> str:
-    """Level, magnitude, direction and freshness in one text block."""
-    headline = {Level.OK: "good", Level.WARN: "elevated", Level.ERR: "high"}[level]
-    pm25_trend = trend(pm25, pm25_before)
-    pm10_trend = trend(pm10, pm10_before)
-
-    # No newline straight after <pre>: Telegram would render a blank first line.
-    body = [
-        f"PM2.5  {meter(pm25, thresholds.pm25_err)}  {pm25:>5.1f}  {pm25_trend}".rstrip(),
-        f"PM10   {meter(pm10, thresholds.pm10_err)}  {pm10:>5.1f}  {pm10_trend}".rstrip(),
-    ]
-    if spark:
-        body += ["", f"last hour  {sparkline(spark)}"]
-
-    footer = f"updated {relative_time(observed_at, now)}"
-    if pm25_trend or pm10_trend:
-        footer += " · change vs 1h ago"
-
-    return (
-        f"<b>{level.emoji} Air quality — {headline}</b>\n"
-        f"<pre>{chr(10).join(body)}</pre>\n"
-        f"<i>{footer}</i>"
-    )
-
-
 def format_stale_card(observed_at: datetime, expected_every: int,
                       now: datetime | None = None) -> str:
     """A dead reader must not look like clean air."""
@@ -138,41 +54,16 @@ def format_stale_card(observed_at: datetime, expected_every: int,
     )
 
 
-def format_caption(title: str, stats: dict, count: int) -> str:
-    """Chart caption: the stats table, small enough to ride along with the photo."""
-    body = "\n".join([
-        f"PM2.5  {stats['pm25_min']:>5.1f} · <b>{stats['pm25_avg']:.1f}</b> · {stats['pm25_max']:.1f}",
-        f"PM10   {stats['pm10_min']:>5.1f} · <b>{stats['pm10_avg']:.1f}</b> · {stats['pm10_max']:.1f}",
-        "       <i>min · avg · max</i>  µg/m³",
-    ])
-    caption = f"<b>{title}</b> · {count} samples\n<pre>{body}</pre>"
+def format_caption(title: str, count: int) -> str:
+    """Chart caption — one line; the numbers are typeset into the PNG.
+
+    Telegram has no table markup at all (the tag set is b/i/u/s/code/pre/a/
+    blockquote), so a text table can only ever be a monospace block, and a bold
+    cell inside <pre> renders in a wider face and shifts its whole row. The
+    image is the only place the columns can line up honestly.
+    """
+    caption = f"<b>{title}</b> · {count} samples"
     return caption if len(caption) <= CAPTION_LIMIT else caption[:CAPTION_LIMIT]
-
-
-def make_stats_table(pm25_min, pm25_avg, pm25_max,
-                     pm10_min, pm10_avg, pm10_max,
-                     count: int, title: str) -> str:
-    headers = ["Metric", "Min", "Avg", "Max"]
-    rows = [
-        ["PM2.5", f"{pm25_min:.1f}", f"{pm25_avg:.1f}", f"{pm25_max:.1f}"],
-        ["PM10",  f"{pm10_min:.1f}", f"{pm10_avg:.1f}", f"{pm10_max:.1f}"],
-    ]
-    colw = [max(len(h), max(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
-
-    def line(cols):
-        return "  ".join(c.ljust(colw[i]) for i, c in enumerate(cols))
-
-    body_lines = [line(headers), line(["—" * colw[i] for i in range(4)])]
-
-    for r in rows:
-        body_lines.append(line(r))
-    body_text = "\n".join(body_lines)
-
-    return (
-        f"<b>{title}</b>\n"
-        f"<pre>{body_text}</pre>\n"
-        f"Samples: <b>{count}</b>"
-    )
 
 
 def info_text(thresholds: Thresholds) -> str:

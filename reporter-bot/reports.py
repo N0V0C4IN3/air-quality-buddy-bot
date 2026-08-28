@@ -16,8 +16,8 @@ import pandas as pd
 from common.air_quality import Level, Thresholds
 from common.db import Database, ReadingRepository
 
-from charts import hour_heatmap, palette_for, window_chart
-from html_helpers import format_caption, format_stale_card, format_status_card
+from charts import hour_heatmap, palette_for, status_card, window_chart
+from html_helpers import format_caption, format_stale_card, relative_time
 
 # How many recent readings the /status sparkline draws.
 SPARK_POINTS = 12
@@ -129,24 +129,34 @@ class ReadingReports:
             expected_every=self._interval,
         )
 
-    def status_text(self, *, now: Optional[datetime] = None) -> Optional[str]:
+    def status_report(self, *, now: Optional[datetime] = None,
+                      theme: str = "light") -> Optional[Report]:
+        """The latest reading as a card PNG.
+
+        A quiet sensor stays text: a dead reader must not have to wait on a
+        render, and there is nothing to draw.
+        """
         now = now or datetime.now(timezone.utc)
         view = self.status(now=now)
         if view is None:
             return None
         if view.is_stale(now):
-            return format_stale_card(view.observed_at, view.expected_every, now)
-        return format_status_card(
+            return Report(text=format_stale_card(view.observed_at,
+                                                 view.expected_every, now))
+
+        chart = status_card(
             pm25=view.pm25,
             pm10=view.pm10,
-            level=view.level,
-            observed_at=view.observed_at,
+            level=view.level.value,
             thresholds=self._thresholds,
+            freshness=f"updated {relative_time(view.observed_at, now)}",
             spark=view.spark,
             pm25_before=view.pm25_before,
             pm10_before=view.pm10_before,
-            now=now,
+            palette=palette_for(theme),
         )
+        chart.name = "status.png"
+        return Report(text=f"{view.level.emoji} <b>Air quality</b>", chart=chart)
 
     def status_block(self, pm25: float, pm10: float, ts_utc: datetime) -> str:
         """Compact block for alert fan-out."""
@@ -169,7 +179,7 @@ class ReadingReports:
         palette = palette_for(theme)
         if window.is_heatmap:
             chart = hour_heatmap(df, tz=self._tz, palette=palette)
-            text = self._patterns_caption(df)
+            text = f"<b>{window.title}</b> · last 7 days"
         else:
             chart = window_chart(
                 df,
@@ -180,7 +190,7 @@ class ReadingReports:
                 smooth_window=window.smooth_window,
                 multiday=window.multiday,
             )
-            text = format_caption(window.title, _stats(df), len(df))
+            text = format_caption(window.title, len(df))
 
         chart.name = f"{window.slug}.png"
         return Report(text=text, chart=chart)
@@ -196,29 +206,6 @@ class ReadingReports:
             return pd.DataFrame(
                 [{"timestamp": r.timestamp, "pm25": r.pm25, "pm10": r.pm10} for r in rows]
             )
-
-    def _patterns_caption(self, df: pd.DataFrame) -> str:
-        local = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(self._tz)
-        by_hour = df.assign(hour=local.dt.hour).groupby("hour")["pm25"].mean()
-        worst_hour = int(by_hour.idxmax())
-        best_hour = int(by_hour.idxmin())
-        return (
-            "<b>Patterns</b> · last 7 days\n"
-            f"<pre>worst hour  {worst_hour:02d}:00   {by_hour.max():.0f} µg/m³\n"
-            f"best hour   {best_hour:02d}:00   {by_hour.min():.0f} µg/m³</pre>"
-        )
-
-
-def _stats(df: pd.DataFrame) -> dict:
-    agg = df.agg({"pm25": ["min", "mean", "max"], "pm10": ["min", "mean", "max"]})
-    return {
-        "pm25_min": float(agg.loc["min", "pm25"]),
-        "pm25_avg": float(agg.loc["mean", "pm25"]),
-        "pm25_max": float(agg.loc["max", "pm25"]),
-        "pm10_min": float(agg.loc["min", "pm10"]),
-        "pm10_avg": float(agg.loc["mean", "pm10"]),
-        "pm10_max": float(agg.loc["max", "pm10"]),
-    }
 
 
 def _as_utc(dt: datetime) -> datetime:

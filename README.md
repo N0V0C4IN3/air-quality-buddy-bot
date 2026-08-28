@@ -11,7 +11,7 @@
 - Charts stack PM2.5 and PM10 in their own panes, each shaded with its own warn/high bands
 - Inline buttons switch window in place; 7d is smoothed with the raw readings kept underneath
 - Patterns view: an hour-of-day heatmap showing *when* the air is worst
-- /status shows a meter, an hour-long sparkline, the trend vs an hour ago, and warns when the sensor goes quiet
+- /status renders a card PNG: a level bar against that pollutant's own limits, an hour-long sparkline, the trend vs an hour ago, and a text notice when the sensor goes quiet
 - Per-chat light or dark charts
 - Optional alerts with cooldown
 - Housekeeper to prune old data
