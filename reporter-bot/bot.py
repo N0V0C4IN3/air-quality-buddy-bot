@@ -79,7 +79,7 @@ async def status_handler(message: types.Message):
         return
     await message.answer_photo(
         photo=_photo(report),
-        caption=report.text,
+        caption=report.text or None,
         reply_markup=menu(message.chat.id),
     )
 
@@ -194,7 +194,7 @@ async def _on_alert(alert: Alert) -> None:
             sent = await bot.send_photo(
                 chat_id=chat_id,
                 photo=uploaded.get(theme) or _photo(card),
-                caption=card.text,
+                caption=card.text or None,
                 reply_markup=main_menu_markup(True),
             )
             uploaded.setdefault(theme, sent.photo[-1].file_id)

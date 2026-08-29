@@ -17,9 +17,7 @@ from common.air_quality import Level, Thresholds
 from common.db import Database, ReadingRepository
 
 from charts import hour_heatmap, palette_for, status_card, window_chart
-from html_helpers import (
-    format_alert_caption, format_caption, format_stale_card, relative_time,
-)
+from html_helpers import format_caption, format_stale_card, relative_time
 
 # How many recent readings the /status sparkline draws.
 SPARK_POINTS = 12
@@ -158,7 +156,9 @@ class ReadingReports:
             palette=palette_for(theme),
         )
         chart.name = "status.png"
-        return Report(text=f"{view.level.emoji} <b>Air quality</b>", chart=chart)
+        # No caption: the card names the level itself, and a caption under it
+        # only repeats what the PNG already says.
+        return Report(text="", chart=chart)
 
     def alert_report(self, pm25: float, pm10: float, ts_utc: datetime, *,
                      theme: str = "light", now: Optional[datetime] = None) -> Report:
@@ -185,7 +185,7 @@ class ReadingReports:
             palette=palette_for(theme),
         )
         chart.name = "alert.png"
-        return Report(text=format_alert_caption(level, ts_utc, self._tz), chart=chart)
+        return Report(text="", chart=chart)
 
     def alert_text(self, pm25: float, pm10: float, ts_utc: datetime) -> str:
         """Text fallback — used when a render fails; an alert must still arrive."""

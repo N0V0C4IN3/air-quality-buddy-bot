@@ -184,7 +184,7 @@ def test_a_fresh_reading_is_not_stale(reports, db):
     assert reports.status(now=now).is_stale(now) is False
 
     report = reports.status_report(now=now)
-    assert "Sensor quiet" not in report.text
+    assert report.text == ""                   # the card carries everything
     assert report.chart.getvalue().startswith(PNG_MAGIC)
     assert report.chart.name == "status.png"
 
@@ -213,9 +213,7 @@ def test_alert_is_a_card_png(reports, db):
 
     assert report.chart.getvalue().startswith(PNG_MAGIC)
     assert report.chart.name == "alert.png"
-    assert Level.ERR.emoji in report.text
-    assert "high" in report.text
-    assert "13:00:00" in report.text          # UTC+3, the configured zone
+    assert report.text == ""                  # the card carries everything
 
 
 def test_alert_describes_the_reading_that_tripped_it(reports, db):
@@ -225,7 +223,9 @@ def test_alert_describes_the_reading_that_tripped_it(reports, db):
 
     report = reports.alert_report(90.0, 20.0, at, now=at)
 
-    assert Level.ERR.emoji in report.text
+    # The card is drawn from the payload, so it cannot look like the calm reading.
+    calm = reports.alert_report(2.0, 2.0, at, now=at)
+    assert report.chart.getvalue() != calm.chart.getvalue()
 
 
 def test_alert_renders_without_any_history(reports):
@@ -241,8 +241,9 @@ def test_alert_colour_follows_the_configured_thresholds(db):
                                                  pm25_err=30, pm10_err=40))
     lax = ReadingReports(db, KYIV, Thresholds())
 
-    assert Level.WARN.emoji in strict.alert_report(12.0, 1.0, at, now=at).text
-    assert Level.OK.emoji in lax.alert_report(12.0, 1.0, at, now=at).text
+    # The level lives in the PNG now, so the two cards must not be identical.
+    assert (strict.alert_report(12.0, 1.0, at, now=at).chart.getvalue()
+            != lax.alert_report(12.0, 1.0, at, now=at).chart.getvalue())
 
 
 def test_alert_text_fallback_still_carries_the_numbers(reports):
