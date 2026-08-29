@@ -342,16 +342,16 @@ def status_card(
     headline = Level(level).label
     level_colour = LEVEL_COLOUR[level]
 
-    fig = plt.figure(figsize=(7, 2.9), dpi=150, facecolor=p.surface)
+    fig = plt.figure(figsize=(7, 3.3), dpi=150, facecolor=p.surface)
     ax = fig.add_axes([0.04, 0.04, 0.92, 0.92])
     ax.set_axis_off()
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
 
-    ax.plot([0.012], [0.93], marker="o", markersize=11, color=level_colour,
+    ax.plot([0.012], [0.93], marker="o", markersize=13, color=level_colour,
             clip_on=False)
     ax.text(0.045, 0.93, f"Air quality — {headline.lower()}", ha="left",
-            va="center", color=p.ink, fontsize=15, fontweight="bold")
+            va="center", color=p.ink, fontsize=18, fontweight="bold")
 
     rows = (
         ("PM2.5", pm25, pm25_before, thresholds.pm25_warn, thresholds.pm25_err),
@@ -362,9 +362,9 @@ def status_card(
         state, colour = _level_of(value, warn, high)
 
         ax.text(0.0, y, label, ha="left", va="center", color=p.ink_2,
-                fontsize=10, fontweight="bold")
+                fontsize=12, fontweight="bold")
         ax.text(0.30, y, f"{value:.1f}", ha="right", va="center", color=colour,
-                fontsize=19, fontweight="bold")
+                fontsize=23, fontweight="bold")
 
         span = BAR_X1 - BAR_X0
         ax.add_patch(Rectangle((BAR_X0, y - BAR_HEIGHT / 2), span, BAR_HEIGHT,
@@ -378,19 +378,23 @@ def status_card(
         mark = BAR_X0 + span * (warn / high if high > 0 else 0)
         ax.plot([mark, mark], [y - BAR_HEIGHT, y + BAR_HEIGHT], color=p.surface,
                 linewidth=1.6, zorder=3)
-        ax.text(mark, y + BAR_HEIGHT * 1.4, f"warn {warn:g}", ha="center",
-                va="bottom", color=p.muted, fontsize=7.5)
+        # Centred on the mark unless that would run into the "high" label,
+        # which happens whenever warn sits close to high.
+        crowded = mark > BAR_X1 - 0.12
+        ax.text(mark - 0.01 if crowded else mark, y + BAR_HEIGHT * 1.4,
+                f"warn {warn:g}", ha="right" if crowded else "center",
+                va="bottom", color=p.muted, fontsize=9)
         ax.text(BAR_X1, y + BAR_HEIGHT * 1.4, f"high {high:g}", ha="right",
-                va="bottom", color=p.muted, fontsize=7.5)
+                va="bottom", color=p.muted, fontsize=9)
 
         # The state word repeats what the bar's colour says.
         ax.text(0.68, y, state.lower(), ha="left", va="center", color=colour,
-                fontsize=9, fontweight="bold")
+                fontsize=11, fontweight="bold")
         ax.text(1.0, y, trend_text(value, before), ha="right", va="center",
-                color=p.muted, fontsize=8.5)
+                color=p.muted, fontsize=10.5)
 
     ax.text(0.0, 0.06, freshness, ha="left", va="center", color=p.muted,
-            fontsize=8.5)
+            fontsize=10.5)
     if spark:
         _spark_axes(fig, spark, p)
 
@@ -410,7 +414,7 @@ def _spark_axes(fig, spark: list, p: Palette) -> None:
     pad = max((high - low) * 0.25, 0.5)
     ax.set_ylim(low - pad, high + pad)
     ax.text(0, 1.0, "PM2.5 · last hour", transform=ax.transAxes, ha="left",
-            va="bottom", color=p.muted, fontsize=7.5)
+            va="bottom", color=p.muted, fontsize=9)
 
 
 # ---------------- hour-of-day heatmap ----------------
