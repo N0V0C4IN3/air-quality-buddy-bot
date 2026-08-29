@@ -176,19 +176,47 @@ async def _on_alert(alert: Alert) -> None:
         log.warning("No subscribers; message will not be delivered")
         return
 
-    text = reports.status_block(alert.pm25, alert.pm10, alert.observed_at)
+    # One render and one upload per theme, however many subscribers there are:
+    # Telegram hands back a file_id for an uploaded photo, and re-sending that
+    # id costs no bytes. Two themes means at most two of each.
+    cards: dict[str, Report] = {}
+    uploaded: dict[str, str] = {}
+
     for chat_id in subscribers:
+        theme = subs.theme(chat_id)
         try:
-            await bot.send_message(
+            if theme not in cards:
+                cards[theme] = reports.alert_report(
+                    alert.pm25, alert.pm10, alert.observed_at, theme=theme,
+                )
+            card = cards[theme]
+
+            sent = await bot.send_photo(
                 chat_id=chat_id,
-                text=text,
+                photo=uploaded.get(theme) or _photo(card),
+                caption=card.text,
                 reply_markup=main_menu_markup(True),
-                disable_web_page_preview=True,
             )
+            uploaded.setdefault(theme, sent.photo[-1].file_id)
             log.debug("Delivered alert to chat_id=%s", chat_id)
         except Exception as e:
             # ignore per-chat errors to avoid blocking the rest
             log.warning("Failed to deliver to chat_id=%s: %s", chat_id, e)
+            await _deliver_alert_as_text(chat_id, alert)
+
+
+async def _deliver_alert_as_text(chat_id: int, alert: Alert) -> None:
+    """Last resort: an alert that cannot be drawn must still arrive."""
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=reports.alert_text(alert.pm25, alert.pm10, alert.observed_at),
+            reply_markup=main_menu_markup(True),
+            disable_web_page_preview=True,
+        )
+        log.info("Delivered alert to chat_id=%s as text", chat_id)
+    except Exception as e:
+        log.warning("Text fallback failed for chat_id=%s: %s", chat_id, e)
 
 
 def _done(t: asyncio.Task):

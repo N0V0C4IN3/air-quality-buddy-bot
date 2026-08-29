@@ -17,7 +17,9 @@ from common.air_quality import Level, Thresholds
 from common.db import Database, ReadingRepository
 
 from charts import hour_heatmap, palette_for, status_card, window_chart
-from html_helpers import format_caption, format_stale_card, relative_time
+from html_helpers import (
+    format_alert_caption, format_caption, format_stale_card, relative_time,
+)
 
 # How many recent readings the /status sparkline draws.
 SPARK_POINTS = 12
@@ -158,8 +160,35 @@ class ReadingReports:
         chart.name = "status.png"
         return Report(text=f"{view.level.emoji} <b>Air quality</b>", chart=chart)
 
-    def status_block(self, pm25: float, pm10: float, ts_utc: datetime) -> str:
-        """Compact block for alert fan-out."""
+    def alert_report(self, pm25: float, pm10: float, ts_utc: datetime, *,
+                     theme: str = "light", now: Optional[datetime] = None) -> Report:
+        """One alert as the same card the status button sends.
+
+        The values come from the alert payload, not from a fresh query: the
+        message must describe the reading that tripped the threshold, even if a
+        newer one has landed since. The sparkline and the hour-ago comparison do
+        come from the DB — they are context, not the subject.
+        """
+        now = now or datetime.now(timezone.utc)
+        level = self._thresholds.level(pm25, pm10)
+        spark, pm25_before, pm10_before = self._recent(now)
+
+        chart = status_card(
+            pm25=pm25,
+            pm10=pm10,
+            level=level.value,
+            thresholds=self._thresholds,
+            freshness=f"reading at {ts_utc.astimezone(self._tz):%H:%M}",
+            spark=spark,
+            pm25_before=pm25_before,
+            pm10_before=pm10_before,
+            palette=palette_for(theme),
+        )
+        chart.name = "alert.png"
+        return Report(text=format_alert_caption(level, ts_utc, self._tz), chart=chart)
+
+    def alert_text(self, pm25: float, pm10: float, ts_utc: datetime) -> str:
+        """Text fallback — used when a render fails; an alert must still arrive."""
         from html_helpers import format_status_block
 
         return format_status_block(
@@ -196,6 +225,18 @@ class ReadingReports:
         return Report(text=text, chart=chart)
 
     # ---------- internals ----------
+
+    def _recent(self, now: datetime):
+        """The last hour as (sparkline points, pm25 an hour ago, pm10 an hour ago)."""
+        with self._db.session() as s:
+            recent = list(ReadingRepository(s).get_range(
+                start=now - timedelta(hours=1), end=now,
+            ))
+        if not recent:
+            return [], None, None
+        earliest = recent[0]
+        return ([r.pm25 for r in recent][-SPARK_POINTS:],
+                earliest.pm25, earliest.pm10)
 
     def _frame(self, start: datetime, end: datetime) -> pd.DataFrame:
         with self._db.session() as s:

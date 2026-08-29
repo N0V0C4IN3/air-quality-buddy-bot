@@ -22,6 +22,12 @@ class Level(str, Enum):
         return {Level.OK: "🟢", Level.WARN: "🟠", Level.ERR: "🔴"}[self]
 
     @property
+    def label(self) -> str:
+        """The word for the level. One owner, so the card, the caption and the
+        alert cannot drift apart."""
+        return {Level.OK: "Good", Level.WARN: "Elevated", Level.ERR: "High"}[self]
+
+    @property
     def is_alerting(self) -> bool:
         return self is not Level.OK
 

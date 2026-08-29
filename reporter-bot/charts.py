@@ -24,7 +24,7 @@ import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Rectangle
 
-from common.air_quality import Thresholds
+from common.air_quality import Level, Thresholds
 
 # Reserved status hues — never used for a series.
 BAND_OK = "#2e9e6b"
@@ -32,13 +32,10 @@ BAND_WARN = "#fab219"
 BAND_HIGH = "#d03b3b"
 BAND_ALPHA = 0.13
 
-# The level word and hue for the status card. Matplotlib's bundled font has no
-# colour emoji, so the card draws a dot and always names the level in words.
-LEVEL_STYLE = {
-    "ok": ("Good", BAND_OK),
-    "warn": ("Elevated", BAND_WARN),
-    "err": ("High", BAND_HIGH),
-}
+# The hue per level. Matplotlib's bundled font has no colour emoji, so the card
+# draws a dot in this colour and names the level in words beside it; the word
+# itself comes from `Level.label`, which owns it.
+LEVEL_COLOUR = {"ok": BAND_OK, "warn": BAND_WARN, "err": BAND_HIGH}
 
 # Sequential single-hue ramp for the heatmap (light -> dark).
 SEQUENTIAL = [
@@ -342,7 +339,8 @@ def status_card(
     is placed against its own limits rather than against the other pollutant's.
     """
     p = palette
-    headline, level_colour = LEVEL_STYLE.get(level, LEVEL_STYLE["ok"])
+    headline = Level(level).label
+    level_colour = LEVEL_COLOUR[level]
 
     fig = plt.figure(figsize=(7, 2.9), dpi=150, facecolor=p.surface)
     ax = fig.add_axes([0.04, 0.04, 0.92, 0.92])

@@ -126,6 +126,14 @@ def info_text(thresholds: Thresholds) -> str:
     return "\n".join(lines)
 
 
+def format_alert_caption(level: Level, ts_utc: datetime, tz=timezone.utc) -> str:
+    """Caption under an alert card. The level is named, not only coloured."""
+    return (
+        f"<b>{level.emoji} Air quality alert — {level.label.lower()}</b>\n"
+        f"<i>at {fmt_dt(ts_utc, tz)}</i>"
+    )
+
+
 def format_status_block(
     pm25: float, pm10: float, ts_utc: datetime, *, level: Level, tz=timezone.utc
 ) -> str:
