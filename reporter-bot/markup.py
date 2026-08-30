@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup,
+    WebAppInfo,
 )
 
 from callbacks import theme_action, window_action
@@ -35,8 +36,14 @@ def main_menu_markup(subscribed: bool) -> ReplyKeyboardMarkup:
     return kb
 
 
-def window_markup(active: Window, *, theme: str = "light") -> InlineKeyboardMarkup:
-    """Buttons under a chart card. The active window is marked, not hidden."""
+def window_markup(active: Window, *, theme: str = "light",
+                  dashboard_url: str = "") -> InlineKeyboardMarkup:
+    """Buttons under a chart card. The active window is marked, not hidden.
+
+    The dashboard button, when there is a URL to point at, gets its own row:
+    it is the escape hatch from a PNG to a view you can hover and zoom, and
+    the window row is already width-budgeted to the pixel.
+    """
     kb = InlineKeyboardMarkup(row_width=3)
     for row in window_rows(active):
         kb.row(*[
@@ -46,4 +53,7 @@ def window_markup(active: Window, *, theme: str = "light") -> InlineKeyboardMark
     kb.add(
         InlineKeyboardButton(theme_label(theme), callback_data=theme_action(active))
     )
+    if dashboard_url:
+        kb.add(InlineKeyboardButton("📊 Open dashboard",
+                                    web_app=WebAppInfo(url=dashboard_url)))
     return kb

@@ -4,20 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Three Python services around a Postgres DB, a RabbitMQ broker and Redis, orchestrated by `docker-compose.yaml`:
+Four Python services around a Postgres DB, a RabbitMQ broker and Redis, orchestrated by `docker-compose.yaml`:
 
 - **sensor-reader** — polls an SDS011 particulate sensor over serial, writes `readings` rows, and publishes an AMQP alert when a reading is not `ok`.
 - **reporter-bot** — aiogram (v2) Telegram bot: latest reading, Today / Last 12h / Last 7d stats + matplotlib chart, subscribe toggle. Also consumes the alert queue and fans alerts out to subscribers.
 - **housekeeper** — infinite loop that prunes `readings` older than `PRUNE_MAX_AGE_DAYS`.
+- **web-api** — read-only FastAPI service: JSON over the same `readings` table plus the
+  static dashboard page it serves from `web-api/static`. Opens as a Telegram Mini App.
 
-`common/` is shared by all three (copied into each image at `/app/common`) and holds three modules: `db.py` (SQLAlchemy `Base`, the `Reading`/`Chat` models, the `Database` session context manager, the two repositories), `air_quality.py` (`Thresholds` → `Level`, the single owner of the threshold rules), and `alerts.py` (the `Alert` payload + `alerts.<level>` routing-key grammar shared by publisher and consumer). Alembic migrations live at the repo root (`alembic.ini`, `alembic/`) and are shared too — schema changes go there, not into per-service code.
+`common/` is shared by all four (copied into each image at `/app/common`) and holds three modules: `db.py` (SQLAlchemy `Base`, the `Reading`/`Chat` models, the `Database` session context manager, the two repositories), `air_quality.py` (`Thresholds` → `Level`, the single owner of the threshold rules), and `alerts.py` (the `Alert` payload + `alerts.<level>` routing-key grammar shared by publisher and consumer). Alembic migrations live at the repo root (`alembic.ini`, `alembic/`) and are shared too — schema changes go there, not into per-service code.
 
 ## Commands
 
-All builds use the repo root as Docker build context (`context: .`, `dockerfile: <svc>/Dockerfile`), because each image copies `common/` and `alembic/`.
+All builds use the repo root as Docker build context (`context: .`, `dockerfile: <svc>/Dockerfile`), because each image copies `common/` (and, except web-api, `alembic/`).
 
 ```bash
 docker compose up --build -d                 # all services
+docker compose --profile tunnel up -d        # ...plus the Cloudflare tunnel
 docker compose up --build db reporter-bot -d # one service (always bring up its deps)
 docker compose logs -f reporter-bot
 docker compose down
@@ -43,12 +46,15 @@ python -m pytest tests/test_reports.py # one file
 python -m pytest -k cooldown           # one behaviour
 python -m pytest tests/test_migrations.py  # runs the real Alembic scripts on SQLite
 python -m pytest tests/test_alerting.py::test_escalation_is_never_suppressed
+python -m pytest tests/test_web_api.py     # dashboard routes over SQLite, no server
 ```
 
 Root `conftest.py` does the path setup: the services are not packages, so their
 directories go on `sys.path` to reproduce the flat imports used in the images.
-Both services have a `config` module — `sensor-reader` wins a bare
-`import config`; reporter-bot's is loaded by file path in `tests/test_config.py`.
+Three services have a `config` module — `sensor-reader` wins a bare
+`import config`; reporter-bot's is loaded by file path in `tests/test_config.py`,
+and `web-api` goes on the *end* of `sys.path` for the same reason (its
+testable modules take their dependencies as arguments and never import config).
 Each config module calls `Settings.load()` at import, so `conftest.py` sets the
 sensor-reader variables before collection.
 
@@ -73,6 +79,33 @@ There is no linter or CI config in this repo.
 - **One `Database` per process.** Constructed once in `bot.py` / `main.py` and passed in; never build one inside a handler or a loop pass — that creates a fresh engine and pool each time.
 - **aiogram is pinned to 2.25.1** — decorator/`executor.start_polling` style, not the v3 Router API.
 - **Thresholds have one owner.** `common.air_quality.Thresholds` is built from env once per service and passed around; nothing else should read `PM25_WARN` and friends or re-implement the comparison.
+- **The dashboard aggregates in SQL, not in Python.** `ReadingRepository.get_buckets`
+  / `get_aggregate` / `count_by_level` reduce a range before it leaves the database —
+  ninety days is ~26k rows and nothing downstream wants them individually. The one
+  dialect-specific part is the epoch expression (`extract('epoch')` on Postgres,
+  `strftime('%s')` on SQLite so the tests still run). Buckets are aligned to the epoch,
+  not to the requested start, so panning a chart does not reshuffle its points.
+- **`web-api` is read-only and does not migrate.** sensor-reader and reporter-bot own
+  the schema; a reader racing them to `alembic upgrade` buys nothing. Its image copies
+  `common/` but not `alembic/`.
+- **The point budget is a server-side rule.** `ranges.choose_bucket` widens the bucket
+  rather than honouring a request that would return more points than `WEB_MAX_POINTS`.
+  `raw` is not a fixed width — it means one bucket per reading interval, which is why
+  the pipeline needs no special case for unaggregated data.
+- **The dashboard's auth has three modes, and only one of them identifies anyone.**
+  `web-api/auth.py` verifies Telegram's `initData` HMAC with the bot token; a verified
+  viewer carries a chat id, which is how the page reads and writes the same
+  `chats.chart_theme` the bot renders PNGs with. `WEB_AUTH_MODE=token`/`public` visitors
+  have no chat row, so `POST /api/theme` is a 403 for them by design — a plain browser
+  link cannot carry `initData`, which is why the bot description should point at a
+  `t.me` deep link rather than the raw URL.
+- **The web palette mirrors `charts.py` exactly.** `web-api/static/styles.css` restates
+  the same hex values as CSS custom properties, and the amber/red band hues stay reserved
+  for threshold state. Change one side and change the other, or the Telegram card and the
+  web view stop looking like the same product.
+- **`DASHBOARD_URL` must be HTTPS or absent.** Telegram refuses a `web_app` button with a
+  plain-http URL, and that failure would take down every chart card, not just the button —
+  so `reporter-bot/config.py` rejects it at boot and an unset value simply hides the button.
 - **Config is parsed once, at boot.** Each service's `Settings.load()` reads its whole environment and raises `ConfigError` on a missing required value. Don't reach for `os.getenv` elsewhere — add the field to `Settings`.
 
 ## Configuration
@@ -82,4 +115,9 @@ All services read a root `.env` via `env_file`. Beyond the variables documented 
 - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASS`, `AQ_EXCHANGE`, `AQ_EXCHANGE_TYPE`, `AMQP_HEARTBEAT` — sensor-reader publisher
 - `AMQP_URL`, `AQ_EXCHANGE`, `AQ_QUEUE_REPORTER`, `AMQP_PREFETCH`, `AMQP_RETRY_DELAY` — reporter-bot consumer. `AQ_ROUTING_KEYS` is optional now; unset means the `alerts.warn` + `alerts.err` bindings from `common.alerts.binding_keys()`.
 - `REDIS_HOST`, `REDIS_PORT` — reporter-bot
+- `WEB_AUTH_MODE`, `WEB_ACCESS_TOKEN`, `WEB_PORT`, `WEB_MAX_POINTS`,
+  `WEB_INIT_DATA_MAX_AGE` — web-api. It also reads `TELEGRAM_TOKEN` (to verify Mini App
+  signatures) and `PRUNE_MAX_AGE_DAYS` (to tell the page how far back data goes).
+- `DASHBOARD_URL` — optional, reporter-bot. HTTPS only; unset hides the Mini App buttons.
+- `CLOUDFLARE_TUNNEL_TOKEN` — only used by `docker compose --profile tunnel`.
 - `DRY_RUN=true` — `build_sampler` returns a `FakeSampler` instead of touching serial hardware (also implied when `SDS011_PORT` is unset). Use this to develop without the sensor.

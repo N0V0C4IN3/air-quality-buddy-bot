@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher, executor, types
+from aiogram.types import MenuButtonWebApp, WebAppInfo
 
 from common.alerts import Alert
 from common.db import Database
@@ -37,6 +38,11 @@ def menu(chat_id: int):
     return main_menu_markup(subs.is_subscribed(chat_id))
 
 
+def chart_buttons(window: Window, theme: str):
+    return window_markup(window, theme=theme,
+                         dashboard_url=settings.dashboard_url)
+
+
 def _photo(report: Report) -> types.InputFile:
     report.chart.seek(0)
     return types.InputFile(report.chart, filename=report.chart.name)
@@ -54,7 +60,7 @@ async def send_window(message: types.Message, window: Window) -> None:
     await message.answer_photo(
         photo=_photo(report),
         caption=report.text,
-        reply_markup=window_markup(window, theme=theme),
+        reply_markup=chart_buttons(window, theme),
     )
 
 
@@ -122,7 +128,7 @@ async def _swap_card(call: types.CallbackQuery, window: Window, theme: str) -> N
         media=types.InputMediaPhoto(
             _photo(report), caption=report.text, parse_mode="HTML"
         ),
-        reply_markup=window_markup(window, theme=theme),
+        reply_markup=chart_buttons(window, theme),
     )
 
 
@@ -228,6 +234,27 @@ def _done(t: asyncio.Task):
         log.exception("AMQP consumer task crashed")
 
 
+async def _install_menu_button() -> None:
+    """Point the chat menu button at the dashboard.
+
+    Set once at startup and it applies to every chat, so the Mini App is one tap
+    away without a message in the way. Without a URL configured the default
+    commands button stays.
+    """
+    if not settings.dashboard_url:
+        return
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Dashboard", web_app=WebAppInfo(url=settings.dashboard_url)
+            )
+        )
+        log.info("Menu button points at %s", settings.dashboard_url)
+    except Exception:
+        # A bad URL must not stop the bot answering messages.
+        log.exception("Could not set the dashboard menu button")
+
+
 async def on_startup(_):
     """aiogram startup hook: warm the subscriber cache, start the AMQP consumer."""
     count = subs.preload()
@@ -242,6 +269,8 @@ async def on_startup(_):
 
     dp["amqp_consumer"] = consumer
     dp["amqp_task"] = task
+    await _install_menu_button()
+
     log.info("[startup] AMQP consumer task created")
 
 

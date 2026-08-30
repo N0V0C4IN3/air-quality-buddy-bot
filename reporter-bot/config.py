@@ -41,6 +41,21 @@ def _timezone(name: str):
         raise ConfigError(f"{name}={tz!r} is not a known timezone: {e}") from e
 
 
+def _https_url(name: str) -> str:
+    """A Mini App URL, or "" when there is none to offer.
+
+    Telegram refuses a web_app button whose URL is not HTTPS, so a plain http
+    value here would make every chart card fail to send. Dropping it means the
+    dashboard button simply does not appear.
+    """
+    url = (os.getenv(name) or "").strip()
+    if not url:
+        return ""
+    if not url.startswith("https://"):
+        raise ConfigError(f"{name}={url!r} must be an https:// URL for Telegram")
+    return url
+
+
 def _routing_keys() -> list[str]:
     raw = os.getenv("AQ_ROUTING_KEYS")
     if not raw:
@@ -71,6 +86,10 @@ class Settings:
     enable_alerts: bool
     alert_cooldown_seconds: int
 
+    # the web dashboard, if one is deployed. Telegram only opens a Mini App
+    # over HTTPS, so an http:// value is treated as absent.
+    dashboard_url: str
+
     # redis
     redis_host: str
     redis_port: int
@@ -97,6 +116,7 @@ class Settings:
             reading_interval_seconds=max(1, int(os.getenv("READ_INTERVAL_SECONDS", "300"))),
             enable_alerts=_bool("ENABLE_ALERTS", True),
             alert_cooldown_seconds=int(os.getenv("ALERT_COOLDOWN_SECONDS", "1800")),
+            dashboard_url=_https_url("DASHBOARD_URL"),
             redis_host=_require("REDIS_HOST"),
             redis_port=int(os.getenv("REDIS_PORT", "6379")),
             amqp_url=_require("AMQP_URL"),

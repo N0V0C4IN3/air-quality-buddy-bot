@@ -11,3 +11,5 @@ redis
 alembic         # tests/test_migrations.py runs the real migration scripts
 python-dotenv   # alembic/env.py imports it
 tzdata          # Windows has no system tz database
+fastapi         # tests/test_web_api.py exercises the dashboard routes
+httpx           # fastapi.testclient needs it

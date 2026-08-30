@@ -35,3 +35,9 @@ for path in (ROOT / "reporter-bot", ROOT / "sensor-reader", ROOT):
     if entry in sys.path:
         sys.path.remove(entry)
     sys.path.insert(0, entry)
+
+# web-api goes on the end, not the front: it has a `config` module too, and
+# the rule above is that a bare `import config` is sensor-reader's. The
+# modules the tests do import from it — api, auth, ranges, service — take
+# their dependencies as arguments and never import config at all.
+sys.path.append(str(ROOT / "web-api"))
