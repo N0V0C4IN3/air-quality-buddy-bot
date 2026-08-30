@@ -114,6 +114,19 @@ services:
       - web-api
     profiles: ["tunnel"]
 
+  # A throwaway tunnel for looking at the dashboard before there is a domain.
+  # Needs no account, no token and no DNS: Cloudflare invents a random
+  # *.trycloudflare.com hostname and prints it to the log. That hostname is
+  # regenerated on every restart, so it can never be DASHBOARD_URL — the named
+  # `cloudflared` service above is still the permanent path.
+  cloudflared-quick:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://web-api:8080
+    depends_on:
+      - web-api
+    profiles: ["quicktunnel"]
+
   housekeeper:
     build:
       context: .
