@@ -122,10 +122,7 @@ services:
   cloudflared-quick:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    # --protocol http2: the Pi cannot raise its UDP receive buffer far enough
-    # for QUIC (416 kiB against the 7168 kiB cloudflared asks for), which left
-    # the tunnel registering one flaky connection instead of four.
-    command: tunnel --no-autoupdate --protocol http2 --url http://web-api:8080
+    command: tunnel --no-autoupdate --url http://web-api:8080
     depends_on:
       - web-api
     profiles: ["quicktunnel"]
