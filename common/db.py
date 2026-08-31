@@ -68,6 +68,12 @@ class Database:
         )
 
     def create_all(self) -> None:
+        """Build the schema straight from the models.
+
+        For tests. Production schema belongs to Alembic - `create_all` can
+        only add a missing table, never alter an existing one, so using it
+        to bootstrap a service turns every later column into a silent no-op.
+        """
         Base.metadata.create_all(self.engine)
 
     @contextmanager

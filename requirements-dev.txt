@@ -3,7 +3,7 @@
 #   python -m pip install -r requirements-dev.txt
 #   python -m pytest
 pytest>=8.0
-sqlalchemy==2.0.32
+sqlalchemy==2.0.52
 pandas>=2.2
 matplotlib>=3.9
 pyserial==3.5

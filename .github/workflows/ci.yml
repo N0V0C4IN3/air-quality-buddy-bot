@@ -14,18 +14,17 @@ jobs:
   # The main gate. Needs no Postgres, Redis, RabbitMQ or sensor - the suite runs
   # on SQLite, an in-memory cache and a fake serial port.
   #
-  # 3.11 only, because 3.11 is what every image ships. A 3.14 leg was tried and
-  # removed: sqlalchemy==2.0.32, which all four services pin, cannot import on
-  # 3.14 (`Union.__getitem__` changed). The suite appears to pass on 3.14 locally
-  # only because that machine has 2.0.52 installed rather than the pinned
-  # version - so a 3.14 leg would be testing a combination that is not shipped.
-  # Bump the pin across the four requirements.txt files and this can come back.
+  # 3.11 is what every image ships; 3.14 is what the repo is developed on. Both
+  # are required, so neither environment rots unnoticed. 3.14 only became
+  # testable once the sqlalchemy pin moved to 2.0.52 - 2.0.32 cannot import on
+  # it at all (`Union.__getitem__` changed), which meant local runs and shipped
+  # images were quietly on different versions.
   tests:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11"]
+        python: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -176,29 +175,16 @@ jobs:
           alembic downgrade -1
           alembic upgrade head
 
-      # KNOWN GAP, deliberately encoded here rather than hidden: the baseline
-      # migration is empty, so `readings` is never created by a migration - it
-      # exists only because sensor-reader calls Database.create_all() at
-      # startup. Production is therefore built by migrations *and* create_all,
-      # and the drift check has to reproduce both or it fails on day one.
-      #
-      # The cost: create_all papers over any future change to `readings`, so
-      # this check cannot catch a missing migration for that table. It does
-      # catch drift in `chats`, and any model change create_all cannot mask.
-      # Fixing the baseline would let this become a real check for both tables.
-      - name: Build the schema the way production does
-        run: |
-          python -c "
-          from common.db import Database
-          import os
-          Database(url=os.environ['DATABASE_URL']).create_all()
-          print('create_all applied on top of the migration chain')
-          "
-
+      # `alembic upgrade head` alone is the whole schema now - no create_all
+      # anywhere - so autogenerate seeing anything at all means a model changed
+      # without a migration to carry it.
       - name: The models match the migrations
         run: |
+          before=$(ls alembic/versions/*.py | sort)
           alembic revision --autogenerate -m ci-drift-check >/dev/null
-          new=$(git ls-files --others --exclude-standard alembic/versions | head -1)
+          # Diff the directory rather than asking git what is untracked: the
+          # latter also picks up any migration that is merely uncommitted.
+          new=$(ls alembic/versions/*.py | sort | comm -13 <(echo "$before") -)
           if [ -z "$new" ]; then
             echo "autogenerate produced no file; cannot judge drift"
             exit 1

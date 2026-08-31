@@ -79,6 +79,13 @@ There is no linter or CI config in this repo.
 - **One `Database` per process.** Constructed once in `bot.py` / `main.py` and passed in; never build one inside a handler or a loop pass — that creates a fresh engine and pool each time.
 - **aiogram is pinned to 2.25.1** — decorator/`executor.start_polling` style, not the v3 Router API.
 - **Thresholds have one owner.** `common.air_quality.Thresholds` is built from env once per service and passed around; nothing else should read `PM25_WARN` and friends or re-implement the comparison.
+- **Alembic owns the whole schema; `create_all` is test-only.** Until 2026-08-31 the
+  baseline migration was empty and `readings` was created by `Database.create_all()` at
+  sensor-reader startup, which meant a new column on `Reading` would never reach an
+  existing database — `create_all` adds a missing table, it cannot alter one. Migration
+  `a1292fda24f3` adopts the table (guarded, so it is a no-op where it already exists) and
+  the call is gone from the service. `Database.create_all` now has one caller,
+  `tests/conftest.py`. A model change without a migration fails CI's drift check.
 - **The dashboard aggregates in SQL, not in Python.** `ReadingRepository.get_buckets`
   / `get_aggregate` / `count_by_level` reduce a range before it leaves the database —
   ninety days is ~26k rows and nothing downstream wants them individually. The one

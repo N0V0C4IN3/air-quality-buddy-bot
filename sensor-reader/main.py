@@ -74,8 +74,11 @@ def main():
     log.info(
         "Starting sensor-reader (dry_run=%s, port=%s)", settings.dry_run, settings.sds011_port
     )
+    # No create_all: the schema belongs to Alembic, and the Dockerfile runs
+    # `alembic upgrade head` before this. create_all only ever created a
+    # missing table - it could not apply a change to an existing one, which
+    # made every column added after the first deploy a silent no-op.
     db = Database(url=settings.database_url, echo=False)
-    db.create_all()
 
     sampler = build_sampler(settings)
     publisher = Publisher.from_settings(settings)
