@@ -1,0 +1,207 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The main gate. Needs no Postgres, Redis, RabbitMQ or sensor - the suite runs
+  # on SQLite, an in-memory cache and a fake serial port.
+  #
+  # 3.11 is what the images ship; 3.14 is what the repo is developed on. Both are
+  # required, so neither environment rots unnoticed.
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest
+
+  # `markup.py` is the only reporter-bot module that imports aiogram, so it is
+  # invisible to the job above - aiogram is deliberately not a test dependency
+  # (2.25.1 predates the Python the repo is developed on). Installing the
+  # service's own requirements on the version its image uses makes those tests
+  # real instead of skipped.
+  aiogram-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            reporter-bot/requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements-dev.txt -r reporter-bot/requirements.txt
+      - name: The suite, with aiogram present
+        run: python -m pytest -rs
+
+  # Catches what pytest structurally cannot: a dependency used by `common/` but
+  # missing from one service's requirements.txt (there is no shared file), an
+  # import-time error in code no test imports, and the uPlot fetch in web-api's
+  # Dockerfile breaking.
+  #
+  # Runners are amd64; the Pi is aarch64. Add `platforms: linux/arm64` via QEMU
+  # here if an arch-specific wheel ever bites - it is a lot slower.
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build all four images
+        run: |
+          for svc in sensor-reader reporter-bot housekeeper web-api; do
+            echo "::group::$svc"
+            docker buildx build --load -f "$svc/Dockerfile" -t "$svc:ci" .
+            echo "::endgroup::"
+          done
+
+      # Each image reproduces the flat import layout (`/app` is the service
+      # directory), so this is the only place `import bot` resolves reporter-bot's
+      # config rather than sensor-reader's. Every entrypoint is guarded by
+      # `if __name__ == "__main__"`, so importing starts nothing.
+      - name: Import each entrypoint inside its own image
+        run: |
+          set -e
+          docker run --rm \
+            -e DATABASE_URL=sqlite:// -e DRY_RUN=true \
+            -e RABBITMQ_HOST=localhost -e RABBITMQ_USER=guest -e RABBITMQ_PASS=guest \
+            -e AQ_EXCHANGE=aq.alerts \
+            sensor-reader:ci python -c "import main; print('sensor-reader ok')"
+
+          docker run --rm \
+            -e DATABASE_URL=sqlite:// \
+            -e TELEGRAM_TOKEN=110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw \
+            -e REDIS_HOST=localhost -e AMQP_URL=amqp://guest:guest@localhost:5672/ \
+            -e AQ_EXCHANGE=aq.alerts -e AQ_QUEUE_REPORTER=reporter-bot-alerts \
+            reporter-bot:ci python -c "import bot; print('reporter-bot ok')"
+
+          docker run --rm \
+            -e DATABASE_URL=sqlite:// \
+            housekeeper:ci python -c "import main; print('housekeeper ok')"
+
+          docker run --rm \
+            -e DATABASE_URL=sqlite:// \
+            -e TELEGRAM_TOKEN=110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw \
+            web-api:ci python -c "import main; print('web-api ok')"
+
+      # DASHBOARD_URL is validated at boot precisely because Telegram refuses a
+      # web_app button over plain http, and that failure would break every chart
+      # card rather than just the button.
+      - name: A plain-http DASHBOARD_URL must fail the bot at boot
+        run: |
+          if docker run --rm \
+              -e DATABASE_URL=sqlite:// \
+              -e TELEGRAM_TOKEN=110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw \
+              -e REDIS_HOST=localhost -e AMQP_URL=amqp://guest:guest@localhost:5672/ \
+              -e AQ_EXCHANGE=aq.alerts -e AQ_QUEUE_REPORTER=reporter-bot-alerts \
+              -e DASHBOARD_URL=http://insecure.example.com \
+              reporter-bot:ci python -c "import bot" 2>/dev/null; then
+            echo "an http:// DASHBOARD_URL was accepted; it must raise ConfigError"
+            exit 1
+          fi
+          echo "rejected as expected"
+
+      - name: The dashboard served by web-api answers
+        run: |
+          docker run -d --name web-api-ci -p 8080:8080 \
+            -e DATABASE_URL=sqlite:////tmp/ci.db \
+            -e WEB_AUTH_MODE=public \
+            web-api:ci
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8080/api/health && break || sleep 2
+          done
+          echo
+          curl -fsS -o /dev/null -w 'index %{http_code}\n' http://127.0.0.1:8080/
+          curl -fsS -o /dev/null -w 'uplot %{http_code} %{size_download}b\n' \
+            http://127.0.0.1:8080/vendor/uPlot.iife.min.js
+          docker rm -f web-api-ci
+
+  # "Edited common/db.py, forgot the migration" is invisible until a container
+  # boots against a schema that does not match the ORM - and migrations run
+  # automatically on container start, so the Pi is where it would surface.
+  # Checked against Postgres, not SQLite, so autogenerate does not invent
+  # differences that only exist in SQLite's type affinity.
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: airqualitydb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d airqualitydb"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg2://postgres:password@127.0.0.1:5432/airqualitydb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements-dev.txt psycopg2-binary
+
+      - name: Migrations apply, and roll back
+        run: |
+          alembic upgrade head
+          alembic downgrade -1
+          alembic upgrade head
+
+      # KNOWN GAP, deliberately encoded here rather than hidden: the baseline
+      # migration is empty, so `readings` is never created by a migration - it
+      # exists only because sensor-reader calls Database.create_all() at
+      # startup. Production is therefore built by migrations *and* create_all,
+      # and the drift check has to reproduce both or it fails on day one.
+      #
+      # The cost: create_all papers over any future change to `readings`, so
+      # this check cannot catch a missing migration for that table. It does
+      # catch drift in `chats`, and any model change create_all cannot mask.
+      # Fixing the baseline would let this become a real check for both tables.
+      - name: Build the schema the way production does
+        run: |
+          python -c "
+          from common.db import Database
+          import os
+          Database(url=os.environ['DATABASE_URL']).create_all()
+          print('create_all applied on top of the migration chain')
+          "
+
+      - name: The models match the migrations
+        run: |
+          alembic revision --autogenerate -m ci-drift-check >/dev/null
+          new=$(git ls-files --others --exclude-standard alembic/versions | head -1)
+          if [ -z "$new" ]; then
+            echo "autogenerate produced no file; cannot judge drift"
+            exit 1
+          fi
+          if grep -qE '^\s+op\.' "$new"; then
+            echo "::error::common/db.py has changes with no migration. Generated diff:"
+            sed -n '/def upgrade/,/def downgrade/p' "$new"
+            exit 1
+          fi
+          echo "no drift"
