@@ -70,9 +70,11 @@ class Settings:
         mode = _auth_mode()
         # A signature can only be checked with the token that produced it, so
         # telegram mode is a configuration error without it rather than a
-        # runtime surprise on the first visitor.
+        # runtime surprise on the first visitor. The other two modes never
+        # verify a signature they were not given, so the token stays optional
+        # there -- a public dashboard should not demand a bot secret.
         telegram_token = (
-            _require("TELEGRAM_TOKEN") if mode is not AuthMode.TOKEN
+            _require("TELEGRAM_TOKEN") if mode is AuthMode.TELEGRAM
             else os.getenv("TELEGRAM_TOKEN", "")
         )
         access_token = os.getenv("WEB_ACCESS_TOKEN", "")
