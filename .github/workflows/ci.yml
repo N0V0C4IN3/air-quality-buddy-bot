@@ -14,14 +14,18 @@ jobs:
   # The main gate. Needs no Postgres, Redis, RabbitMQ or sensor - the suite runs
   # on SQLite, an in-memory cache and a fake serial port.
   #
-  # 3.11 is what the images ship; 3.14 is what the repo is developed on. Both are
-  # required, so neither environment rots unnoticed.
+  # 3.11 only, because 3.11 is what every image ships. A 3.14 leg was tried and
+  # removed: sqlalchemy==2.0.32, which all four services pin, cannot import on
+  # 3.14 (`Union.__getitem__` changed). The suite appears to pass on 3.14 locally
+  # only because that machine has 2.0.52 installed rather than the pinned
+  # version - so a 3.14 leg would be testing a combination that is not shipped.
+  # Bump the pin across the four requirements.txt files and this can come back.
   tests:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.14"]
+        python: ["3.11"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
