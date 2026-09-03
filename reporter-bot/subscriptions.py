@@ -58,6 +58,20 @@ class Subscriptions:
         with self._db.session() as s:
             return ChatRepository(s).get_theme(chat_id)
 
+    def themes(self, chat_ids) -> dict:
+        """Themes for many chats at once, defaulting to light.
+
+        The alert fan-out needs one per subscriber. Asking chat by chat opened
+        a session, a transaction and a round trip per person - a hundred trips
+        to Postgres to send one alert - and the answer is a single SELECT.
+        """
+        ids = list(chat_ids)
+        if not ids:
+            return {}
+        with self._db.session() as s:
+            stored = ChatRepository(s).get_themes(ids)
+        return {cid: stored.get(str(cid), LIGHT) for cid in ids}
+
     def set_theme(self, chat_id: int, theme: str) -> str:
         if theme not in THEMES:
             raise ValueError(f"unknown chart theme: {theme!r}")

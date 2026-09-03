@@ -188,8 +188,11 @@ async def _on_alert(alert: Alert) -> None:
     cards: dict[str, Report] = {}
     uploaded: dict[str, str] = {}
 
+    # One query for every subscriber's theme, not one per subscriber.
+    theme_by_chat = subs.themes(subscribers)
+
     for chat_id in subscribers:
-        theme = subs.theme(chat_id)
+        theme = theme_by_chat.get(chat_id, "light")
         try:
             if theme not in cards:
                 cards[theme] = reports.alert_report(

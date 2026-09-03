@@ -308,6 +308,25 @@ class ChatRepository:
         chat = self.session.query(Chat).filter_by(chat_id=str(chat_id)).first()
         return chat.chart_theme if chat else "light"
 
+    def get_themes(self, chat_ids: Iterable[str]) -> dict[str, str]:
+        """Themes for many chats in one round trip.
+
+        Chunked because SQLite caps a statement at 999 bound parameters by
+        default, and a popular bot can have more subscribers than that.
+        """
+        ids = [str(c) for c in chat_ids]
+        if not ids:
+            return {}
+        found: dict[str, str] = {}
+        for i in range(0, len(ids), 500):
+            rows = (
+                self.session.query(Chat.chat_id, Chat.chart_theme)
+                .filter(Chat.chat_id.in_(ids[i:i + 500]))
+                .all()
+            )
+            found.update({cid: theme for cid, theme in rows})
+        return found
+
     def set_theme(self, chat_id: str, theme: str) -> Chat:
         """Does not commit; the owning `Database.session()` block does."""
         chat = self._get_or_create(chat_id)
