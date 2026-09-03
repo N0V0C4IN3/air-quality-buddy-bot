@@ -99,21 +99,26 @@ def _style_axes(ax, p: Palette) -> None:
     ax.set_ylabel("µg/m³", color=p.muted, fontsize=9)
 
 
-def _span(times) -> tuple:
+# Matplotlib's date axis is a float count of days, which is why everything
+# below works in that unit: converting the timestamps once and passing floats
+# to every plot call avoids re-running date2num for each of them.
+HALF_HOUR = 30 / (24 * 60)
+
+
+def _span(x) -> tuple:
     """x-limits that stay valid when a window holds a single reading."""
-    first, last = times.iloc[0], times.iloc[-1]
+    first, last = float(x[0]), float(x[-1])
     if first == last:
-        pad = pd.Timedelta(minutes=30)
-        return first - pad, last + pad
+        return first - HALF_HOUR, last + HALF_HOUR
     return first, last
 
 
-def _time_axis(ax, times, tz, *, multiday: bool) -> None:
+def _time_axis(ax, x, tz, *, multiday: bool) -> None:
     locator = mdates.AutoDateLocator(minticks=4, maxticks=7)
     ax.xaxis.set_major_locator(locator)
     fmt = "%a %d" if multiday else "%H:%M"
     ax.xaxis.set_major_formatter(mdates.DateFormatter(fmt, tz=tz))
-    ax.set_xlim(*_span(times))
+    ax.set_xlim(*_span(x))
 
 
 def _smooth(values: np.ndarray, window: int) -> np.ndarray:
@@ -259,7 +264,10 @@ def window_chart(
 
     p = palette
     frame = df.sort_values("timestamp")
-    times = _local_times(frame, tz)
+    # Once per card, not once per plot call. The profile showed date2num and
+    # the pandas iteration behind it costing ~50ms of a ~380ms card, because
+    # every plot, fill_between, annotate and text call converted afresh.
+    x = mdates.date2num(_local_times(frame, tz))
 
     fig = plt.figure(figsize=(7, 5.4), dpi=150, facecolor=p.surface)
     gs = fig.add_gridspec(3, 1, height_ratios=[1, 1, 0.42], hspace=0.32,
@@ -291,36 +299,36 @@ def window_chart(
 
         ax.axhspan(warn, high, color=BAND_WARN, alpha=BAND_ALPHA, linewidth=0, zorder=0)
         ax.axhspan(high, top, color=BAND_HIGH, alpha=BAND_ALPHA, linewidth=0, zorder=0)
-        ax.text(times.iloc[0], warn, f"  warn ≥{warn:g}", va="bottom", ha="left",
+        ax.text(x[0], warn, f"  warn ≥{warn:g}", va="bottom", ha="left",
                 color=p.muted, fontsize=8)
-        ax.text(times.iloc[0], high, f"  high ≥{high:g}", va="bottom", ha="left",
+        ax.text(x[0], high, f"  high ≥{high:g}", va="bottom", ha="left",
                 color=p.muted, fontsize=8)
 
         # Where a point stands for several readings, shade what it covers.
         # Without this the averaged line would quietly flatten every spike -
         # and a spike is the thing this product exists to show.
         if bool((highs > lows).any()):
-            ax.fill_between(times, lows, highs, color=colour, alpha=0.20,
+            ax.fill_between(x, lows, highs, color=colour, alpha=0.20,
                             linewidth=0, zorder=1)
 
         if smooth_window > 1 and len(values) > smooth_window:
-            ax.plot(times, values, color=colour, linewidth=0, marker=".",
+            ax.plot(x, values, color=colour, linewidth=0, marker=".",
                     markersize=2, alpha=0.28, zorder=2)
-            ax.plot(times, _smooth(values, smooth_window), color=colour,
+            ax.plot(x, _smooth(values, smooth_window), color=colour,
                     linewidth=2.2, zorder=3, solid_capstyle="round")
         else:
-            ax.plot(times, values, color=colour, linewidth=2, zorder=3,
+            ax.plot(x, values, color=colour, linewidth=2, zorder=3,
                     solid_capstyle="round")
 
         ax.set_ylim(0, top)
         ax.set_title(label, color=p.ink_2, fontsize=10, fontweight="bold",
                      loc="left", pad=4)
-        ax.annotate(f"{values[-1]:.0f}", xy=(times.iloc[-1], values[-1]),
+        ax.annotate(f"{values[-1]:.0f}", xy=(x[-1], values[-1]),
                     xytext=(6, 0), textcoords="offset points", va="center",
                     color=colour, fontsize=9.5, fontweight="bold")
 
-    _time_axis(axes[1], times, tz, multiday=multiday)
-    axes[0].set_xlim(*_span(times))
+    _time_axis(axes[1], x, tz, multiday=multiday)
+    axes[0].set_xlim(*_span(x))
     total = int(frame["n"].sum()) if "n" in frame.columns else len(frame)
     _stats_footer(footer, stats_rows(frame, thresholds, p), p, samples=total)
     fig.suptitle(title, color=p.ink, fontsize=12, fontweight="bold",

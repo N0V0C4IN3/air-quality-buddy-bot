@@ -56,7 +56,20 @@ makes the desktop sluggish, which is a rude thing for a background loop to do.
 What is left is a **~12% noise floor**, and a single reading 10% below the last
 one is not evidence of anything. Rules that follow:
 
-1. A movement under ~15% is not believed without a re-measure.
+1. A movement under ~15% is not believed without a re-measure. If it is still
+   ambiguous, **A/B it against the machine as it is right now** rather than
+   against a number recorded an hour ago:
+
+   ```
+   git stash push -q -- <changed paths>
+   bash .auto/measure.sh        # the old code, this machine, this minute
+   git stash pop -q
+   bash .auto/measure.sh        # the new code
+   ```
+
+   This settled run 4, where the raw number looked 45% worse than run 3 and the
+   controlled comparison showed a 3.6% improvement - the whole difference was
+   the owner starting to use the desktop again.
 2. When the stopwatch is ambiguous, `rows_to_python`, `service_calls` and
    `bytes_total` decide - they are exact.
 3. `canary_mean_ms` sits near 40 on this machine with priority raised. Above
