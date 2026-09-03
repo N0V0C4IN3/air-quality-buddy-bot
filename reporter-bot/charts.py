@@ -160,12 +160,25 @@ def stats_rows(df: pd.DataFrame, thresholds: Thresholds,
     meaning alone.
     """
     rows = []
+    counts = df["n"].astype(float) if "n" in df.columns else None
     for label, key, warn, high in (
         ("PM2.5", "pm25", thresholds.pm25_warn, thresholds.pm25_err),
         ("PM10", "pm10", thresholds.pm10_warn, thresholds.pm10_err),
     ):
         values = df[key].astype(float)
-        top = float(values.max())
+        # A bucketed frame carries the true extremes beside the average; the
+        # min/max of the averages would understate both.
+        low_col, high_col = f"{key}_min", f"{key}_max"
+        bottom = (float(df[low_col].min()) if low_col in df.columns
+                  else float(values.min()))
+        top = (float(df[high_col].max()) if high_col in df.columns
+               else float(values.max()))
+        if counts is not None and float(counts.sum()) > 0:
+            # Count-weighted, so a partial bucket at either edge does not pull
+            # the mean the way an average of averages would.
+            average = float((values * counts).sum() / counts.sum())
+        else:
+            average = float(values.mean())
         if top >= high:
             peak, colour = "high", BAND_HIGH
         elif top >= warn:
@@ -174,8 +187,8 @@ def stats_rows(df: pd.DataFrame, thresholds: Thresholds,
             peak, colour = "ok", palette.muted
         rows.append(StatRow(
             label=label,
-            minimum=f"{float(values.min()):.1f}",
-            average=f"{float(values.mean()):.1f}",
+            minimum=f"{bottom:.1f}",
+            average=f"{average:.1f}",
             maximum=f"{top:.1f}",
             peak=peak,
             colour=colour,
@@ -247,16 +260,25 @@ def window_chart(
     axes[1].sharex(axes[0])
     axes[0].tick_params(labelbottom=False)
 
+    def _series(key: str):
+        """The line, and the band it stands for. Identical arrays on raw data."""
+        values = frame[key].to_numpy(float)
+        low = (frame[f"{key}_min"].to_numpy(float)
+               if f"{key}_min" in frame.columns else values)
+        high = (frame[f"{key}_max"].to_numpy(float)
+                if f"{key}_max" in frame.columns else values)
+        return values, low, high
+
     panes = (
-        (axes[0], frame["pm25"].to_numpy(float), p.pm25, "PM2.5",
+        (axes[0], _series("pm25"), p.pm25, "PM2.5",
          thresholds.pm25_warn, thresholds.pm25_err),
-        (axes[1], frame["pm10"].to_numpy(float), p.pm10, "PM10",
+        (axes[1], _series("pm10"), p.pm10, "PM10",
          thresholds.pm10_warn, thresholds.pm10_err),
     )
 
-    for ax, values, colour, label, warn, high in panes:
+    for ax, (values, lows, highs), colour, label, warn, high in panes:
         _style_axes(ax, p)
-        top = max(high * 1.12, float(values.max()) * 1.2, Y_FLOOR)
+        top = max(high * 1.12, float(highs.max()) * 1.2, Y_FLOOR)
 
         ax.axhspan(warn, high, color=BAND_WARN, alpha=BAND_ALPHA, linewidth=0, zorder=0)
         ax.axhspan(high, top, color=BAND_HIGH, alpha=BAND_ALPHA, linewidth=0, zorder=0)
@@ -264,6 +286,13 @@ def window_chart(
                 color=p.muted, fontsize=8)
         ax.text(times.iloc[0], high, f"  high ≥{high:g}", va="bottom", ha="left",
                 color=p.muted, fontsize=8)
+
+        # Where a point stands for several readings, shade what it covers.
+        # Without this the averaged line would quietly flatten every spike -
+        # and a spike is the thing this product exists to show.
+        if bool((highs > lows).any()):
+            ax.fill_between(times, lows, highs, color=colour, alpha=0.20,
+                            linewidth=0, zorder=1)
 
         if smooth_window > 1 and len(values) > smooth_window:
             ax.plot(times, values, color=colour, linewidth=0, marker=".",
@@ -283,7 +312,8 @@ def window_chart(
 
     _time_axis(axes[1], times, tz, multiday=multiday)
     axes[0].set_xlim(*_span(times))
-    _stats_footer(footer, stats_rows(frame, thresholds, p), p, samples=len(frame))
+    total = int(frame["n"].sum()) if "n" in frame.columns else len(frame)
+    _stats_footer(footer, stats_rows(frame, thresholds, p), p, samples=total)
     fig.suptitle(title, color=p.ink, fontsize=12, fontweight="bold",
                  x=0.125, ha="left", y=0.99)
 

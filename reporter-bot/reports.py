@@ -24,6 +24,31 @@ SPARK_POINTS = 12
 # A reading older than this many intervals means the reader has gone quiet.
 STALE_INTERVALS = 3
 
+# Above this a card hands matplotlib more strokes than the figure has pixels
+# and the anti-aliaser throws the difference away. The same budget the
+# dashboard has enforced since it shipped (`ranges.MAX_POINTS`).
+MAX_POINTS = 1500
+
+# Widths the bot reduces to, narrowest first.
+BUCKET_WIDTHS = (300, 900, 3600, 21600, 86400)
+
+
+def bucket_seconds(span_seconds: float, interval_seconds: int,
+                   max_points: int = MAX_POINTS) -> Optional[int]:
+    """Narrowest bucket that keeps a card under the point budget; None for raw.
+
+    `ranges.choose_bucket` is the same rule on the web-api side. The bot never
+    had one, which is why a seven-day card pulled twenty thousand rows into
+    pandas to draw a picture a thousand pixels wide.
+    """
+    floor = max(1, interval_seconds)
+    if span_seconds / floor <= max_points:
+        return None
+    for width in BUCKET_WIDTHS:
+        if width >= floor and span_seconds / width <= max_points:
+            return width
+    return BUCKET_WIDTHS[-1]
+
 
 class Window(Enum):
     TODAY = "Today"
@@ -205,6 +230,11 @@ class ReadingReports:
         if df.empty:
             return Report(text=f"No data for {window.title.lower()}.")
 
+        # The caption counts readings, not plotted points - "672 samples" for a
+        # week of 30-second data would be a lie about how much was measured.
+        samples = int(df["n"].sum())
+        reduced = bool((df["n"] > 1).any())
+
         palette = palette_for(theme)
         if window.is_heatmap:
             chart = hour_heatmap(df, tz=self._tz, palette=palette)
@@ -216,10 +246,13 @@ class ReadingReports:
                 thresholds=self._thresholds,
                 tz=self._tz,
                 palette=palette,
-                smooth_window=window.smooth_window,
+                # Bucketing already averages. The rolling mean was tuned for
+                # raw 30-second samples; on top of 15-minute buckets it would
+                # smear three hours together.
+                smooth_window=0 if reduced else window.smooth_window,
                 multiday=window.multiday,
             )
-            text = format_caption(window.title, len(df))
+            text = format_caption(window.title, samples)
 
         chart.name = f"{window.slug}.png"
         return Report(text=text, chart=chart)
@@ -239,14 +272,43 @@ class ReadingReports:
                 earliest.pm25, earliest.pm10)
 
     def _frame(self, start: datetime, end: datetime) -> pd.DataFrame:
+        """The plotted data for a range, reduced in SQL when it is too dense.
+
+        The columns are the same either way, so nothing downstream needs to
+        know which path produced them: `pm25`/`pm10` carry the representative
+        value, `*_min`/`*_max` the extremes behind it, and `n` how many
+        readings each point stands for. On the raw path the extremes are the
+        value itself and `n` is 1.
+
+        Carrying the extremes is not decoration. Plotting bucket averages alone
+        would hide the spike an alert fired on - a five-minute mean of one
+        90 ug/m3 minute and nine quiet ones reads as a comfortable 15.
+        """
+        start_utc = start.astimezone(timezone.utc)
+        end_utc = end.astimezone(timezone.utc)
+        width = bucket_seconds((end - start).total_seconds(), self._interval)
+
         with self._db.session() as s:
-            rows = ReadingRepository(s).get_range(
-                start=start.astimezone(timezone.utc),
-                end=end.astimezone(timezone.utc),
+            repo = ReadingRepository(s)
+            if width is None:
+                return pd.DataFrame([
+                    {"timestamp": r.timestamp,
+                     "pm25": r.pm25, "pm25_min": r.pm25, "pm25_max": r.pm25,
+                     "pm10": r.pm10, "pm10_min": r.pm10, "pm10_max": r.pm10,
+                     "n": 1}
+                    for r in repo.get_range(start=start_utc, end=end_utc)
+                ])
+            buckets = repo.get_buckets(
+                start=start_utc, end=end_utc, bucket_seconds=width,
             )
-            return pd.DataFrame(
-                [{"timestamp": r.timestamp, "pm25": r.pm25, "pm10": r.pm10} for r in rows]
-            )
+
+        return pd.DataFrame([
+            {"timestamp": b.start,
+             "pm25": b.pm25_avg, "pm25_min": b.pm25_min, "pm25_max": b.pm25_max,
+             "pm10": b.pm10_avg, "pm10_min": b.pm10_min, "pm10_max": b.pm10_max,
+             "n": b.count}
+            for b in buckets
+        ])
 
 
 def _as_utc(dt: datetime) -> datetime:
