@@ -117,15 +117,20 @@ class DashboardService:
             "bucket": {"name": name, "seconds": seconds},
             "count": sum(b.count for b in buckets),
             "t": [int(b.start.timestamp()) for b in buckets],
+            # One decimal, because that is the sensor's own precision - the
+            # readings behind these are stored rounded to 0.1 ug/m3 and the
+            # page renders them with toFixed(1). The second decimal was
+            # invented on the way out and paid for on every poll, and the page
+            # re-polls for as long as a tab stays open.
             "pm25": {
-                "avg": [round(b.pm25_avg, 2) for b in buckets],
-                "min": [round(b.pm25_min, 2) for b in buckets],
-                "max": [round(b.pm25_max, 2) for b in buckets],
+                "avg": [round(b.pm25_avg, 1) for b in buckets],
+                "min": [round(b.pm25_min, 1) for b in buckets],
+                "max": [round(b.pm25_max, 1) for b in buckets],
             },
             "pm10": {
-                "avg": [round(b.pm10_avg, 2) for b in buckets],
-                "min": [round(b.pm10_min, 2) for b in buckets],
-                "max": [round(b.pm10_max, 2) for b in buckets],
+                "avg": [round(b.pm10_avg, 1) for b in buckets],
+                "min": [round(b.pm10_min, 1) for b in buckets],
+                "max": [round(b.pm10_max, 1) for b in buckets],
             },
         }
 
