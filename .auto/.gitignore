@@ -1,0 +1,8 @@
+# Build artefacts of the harness, not session state. The log, the prompt and
+# the scripts are the session and they are committed; these are rebuilt.
+bench.db
+bench.fingerprint.json
+run.log
+checks.log
+fidelity.log
+__pycache__/
