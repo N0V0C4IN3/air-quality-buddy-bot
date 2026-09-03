@@ -88,6 +88,17 @@ instant; a 10 s sweep averages ten seconds of machine state. `process_time` was
 also tried and is worse still: on Windows it is quantised to the 15.6 ms
 scheduler tick and counts every thread numpy spawns.
 
+## Writing a log line
+
+`json.dumps(entry, separators=(",", ":"))` - **compact, no spaces**. The
+dashboard generator parses the log with `awk` and looks for the literal
+`"key":`, so Python's default `", "` / `": "` separators make every field
+parse as empty: 15 runs logged, 0 kept, every cell blank. It fails silently
+and it looks like a working dashboard until you open it.
+
+Put the run's headline finding under an `asi` key named `insight` - that is
+the one the generator surfaces in the table.
+
 ## How to run
 
 ```
