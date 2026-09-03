@@ -19,6 +19,7 @@ matplotlib.use("Agg")  # no display on the Pi
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import numpy as np
 import pandas as pd
 from PIL import Image  # ships with matplotlib; not a new dependency
@@ -102,6 +103,9 @@ def _style_axes(ax, p: Palette) -> None:
         ax.spines[side].set_linewidth(1)
     ax.grid(True, axis="y", color=p.grid, linewidth=1)
     ax.set_axisbelow(True)
+    # Four gridlines is enough to read a value off, and every tick is a text
+    # object plus a line - the largest single cost in a card is glyph layout.
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=4, steps=[1, 2, 2.5, 5, 10]))
     ax.tick_params(colors=p.muted, labelsize=9, length=0)
     ax.set_ylabel("µg/m³", color=p.muted, fontsize=9)
 
