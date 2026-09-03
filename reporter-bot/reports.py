@@ -24,10 +24,13 @@ SPARK_POINTS = 12
 # A reading older than this many intervals means the reader has gone quiet.
 STALE_INTERVALS = 3
 
-# Above this a card hands matplotlib more strokes than the figure has pixels
-# and the anti-aliaser throws the difference away. The same budget the
-# dashboard has enforced since it shipped (`ranges.MAX_POINTS`).
-MAX_POINTS = 1500
+# One point per pixel, at most. A card is 7 inches at charts.DPI, of which the
+# plot area is roughly five sixths - about 730 px at 125 dpi - so anything past
+# ~800 points is strokes the anti-aliaser averages away again.
+#
+# Deliberately tighter than the dashboard's 1500: that budget is sized for a
+# browser window, and this one is sized for the PNG it actually draws.
+MAX_POINTS = 800
 
 # Widths the bot reduces to, narrowest first.
 BUCKET_WIDTHS = (300, 900, 3600, 21600, 86400)
