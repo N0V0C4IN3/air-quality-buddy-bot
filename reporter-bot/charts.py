@@ -46,6 +46,12 @@ SEQUENTIAL = [
 # A quiet day must look quiet: never scale the y-axis tighter than this.
 Y_FLOOR = 25.0
 
+# Raster density for every card. Telegram re-encodes an uploaded photo anyway,
+# so pixels above what it keeps cost upload bytes and render time and buy
+# nothing. Drives glyph rasterisation and PNG encoding together - the two
+# largest items in a card's profile after the query.
+DPI = 125
+
 
 @dataclass(frozen=True)
 class Palette:
@@ -269,7 +275,7 @@ def window_chart(
     # every plot, fill_between, annotate and text call converted afresh.
     x = mdates.date2num(_local_times(frame, tz))
 
-    fig = plt.figure(figsize=(7, 5.4), dpi=150, facecolor=p.surface)
+    fig = plt.figure(figsize=(7, 5.4), dpi=DPI, facecolor=p.surface)
     gs = fig.add_gridspec(3, 1, height_ratios=[1, 1, 0.42], hspace=0.32,
                           left=0.105, right=0.935, top=0.872, bottom=0.075)
     axes = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
@@ -389,7 +395,7 @@ def status_card(
     headline = Level(level).label
     level_colour = LEVEL_COLOUR[level]
 
-    fig = plt.figure(figsize=(7, 3.7), dpi=150, facecolor=p.surface)
+    fig = plt.figure(figsize=(7, 3.7), dpi=DPI, facecolor=p.surface)
     ax = fig.add_axes([0.04, 0.04, 0.92, 0.92])
     ax.set_axis_off()
     ax.set_xlim(0, 1)
@@ -514,7 +520,7 @@ def hour_heatmap(
     )
 
     cmap = LinearSegmentedColormap.from_list("air-quality", SEQUENTIAL)
-    fig, ax = plt.subplots(figsize=(7, 3.1), dpi=150, facecolor=p.surface)
+    fig, ax = plt.subplots(figsize=(7, 3.1), dpi=DPI, facecolor=p.surface)
     # Explicit margins because the figure is saved at its own size: the
     # worst/best-hour line sits below the axes and would otherwise be cropped.
     fig.subplots_adjust(left=0.098, right=0.94, top=0.88, bottom=0.26)
