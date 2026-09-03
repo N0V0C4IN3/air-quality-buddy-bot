@@ -42,7 +42,7 @@ TOLERANCE = 0.05
 MEAN_TOLERANCE = 0.02
 
 
-def plotted_frame(reports, start, end):
+def plotted_frame(reports, start, end, floor_seconds=0):
     """The data the chart was built from.
 
     Instrumentation, not a contract - if an experiment moves this seam, update
@@ -54,7 +54,10 @@ def plotted_frame(reports, start, end):
             "fidelity: ReadingReports._frame is gone. Point this hook at "
             "whatever now produces the plotted data, then re-run."
         )
-    return getter(start, end)
+    try:
+        return getter(start, end, floor_seconds=floor_seconds)
+    except TypeError:
+        return getter(start, end)
 
 
 def check() -> int:
@@ -81,7 +84,12 @@ def check() -> int:
             failures.append(f"{window.slug}: the benchmark range holds no readings")
             continue
 
-        frame = plotted_frame(reports, start, end)
+        # The same arguments for_window uses, so the guard checks what is
+        # actually plotted rather than a frame nothing draws.
+        frame = plotted_frame(
+            reports, start, end,
+            floor_seconds=getattr(window, "bucket_floor_seconds", 0),
+        )
         if frame is None or len(frame) == 0:
             failures.append(f"{window.slug}: nothing plotted")
             continue

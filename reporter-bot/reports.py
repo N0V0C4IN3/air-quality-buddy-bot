@@ -81,6 +81,18 @@ class Window(Enum):
         return self in (Window.LAST_7D, Window.PATTERNS)
 
     @property
+    def bucket_floor_seconds(self) -> int:
+        """Finest resolution this window can actually use, 0 for no floor.
+
+        The heatmap groups readings into hour-of-day cells, so anything finer
+        than an hour is averaged away again on arrival. Asking SQL for hourly
+        buckets is both less work and more correct: a count-weighted mean per
+        hour rather than pandas averaging four bucket means as though they
+        stood for equal numbers of readings.
+        """
+        return 3600 if self is Window.PATTERNS else 0
+
+    @property
     def smooth_window(self) -> int:
         """Points in the rolling mean; 0 leaves the raw line alone."""
         return 13 if self is Window.LAST_7D else 0
@@ -242,7 +254,7 @@ class ReadingReports:
     def for_window(self, window: Window, *, now: Optional[datetime] = None,
                    theme: str = "light") -> Report:
         start, end = window.range(now or datetime.now(self._tz))
-        df = self._frame(start, end)
+        df = self._frame(start, end, floor_seconds=window.bucket_floor_seconds)
 
         if df.empty:
             return Report(text=f"No data for {window.title.lower()}.")
@@ -293,7 +305,8 @@ class ReadingReports:
             return [r.pm25 for r in recent], None, None
         return ([r.pm25 for r in recent], earliest.pm25, earliest.pm10)
 
-    def _frame(self, start: datetime, end: datetime) -> pd.DataFrame:
+    def _frame(self, start: datetime, end: datetime,
+               *, floor_seconds: int = 0) -> pd.DataFrame:
         """The plotted data for a range, reduced in SQL when it is too dense.
 
         The columns are the same either way, so nothing downstream needs to
@@ -309,6 +322,8 @@ class ReadingReports:
         start_utc = start.astimezone(timezone.utc)
         end_utc = end.astimezone(timezone.utc)
         width = bucket_seconds((end - start).total_seconds(), self._interval)
+        if floor_seconds:
+            width = max(width or 0, floor_seconds)
 
         with self._db.session() as s:
             repo = ReadingRepository(s)
