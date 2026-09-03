@@ -254,6 +254,63 @@ class ReadingRepository:
             pm10_avg=float(a10), pm10_min=float(l10), pm10_max=float(h10),
         )
 
+    @staticmethod
+    def _level_sums(pm25_warn: float, pm10_warn: float,
+                    pm25_err: float, pm10_err: float):
+        """The level split as three SUM(CASE ...) columns.
+
+        `common.air_quality` owns the rule; this is that same comparison
+        expressed in SQL so the rows never leave the database. One owner here
+        too, because two callers need it.
+        """
+        is_err = (Reading.pm25 >= pm25_err) | (Reading.pm10 >= pm10_err)
+        is_warn = (Reading.pm25 >= pm25_warn) | (Reading.pm10 >= pm10_warn)
+        return (
+            func.sum(case((is_warn, 0), else_=1)),
+            func.sum(case((is_err, 0), (is_warn, 1), else_=0)),
+            func.sum(case((is_err, 1), else_=0)),
+        )
+
+    def summarise(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        pm25_warn: float,
+        pm10_warn: float,
+        pm25_err: float,
+        pm10_err: float,
+    ) -> tuple[Optional["Aggregate"], dict[str, int]]:
+        """Extremes and the level split in a single scan.
+
+        The dashboard wanted both for the same range and asked twice, which
+        walked the range twice to answer one question.
+        """
+        ok, warn, err = self._level_sums(pm25_warn, pm10_warn, pm25_err, pm10_err)
+        row = (
+            self.session.query(
+                func.count(Reading.id),
+                func.min(Reading.timestamp),
+                func.max(Reading.timestamp),
+                func.avg(Reading.pm25), func.min(Reading.pm25), func.max(Reading.pm25),
+                func.avg(Reading.pm10), func.min(Reading.pm10), func.max(Reading.pm10),
+                ok, warn, err,
+            )
+            .filter(Reading.timestamp >= start, Reading.timestamp < end)
+            .one()
+        )
+        levels = {"ok": int(row[9] or 0), "warn": int(row[10] or 0), "err": int(row[11] or 0)}
+        if not row[0]:
+            return None, levels
+        return (
+            Aggregate(
+                count=int(row[0]), first=_utc(row[1]), last=_utc(row[2]),
+                pm25_avg=float(row[3]), pm25_min=float(row[4]), pm25_max=float(row[5]),
+                pm10_avg=float(row[6]), pm10_min=float(row[7]), pm10_max=float(row[8]),
+            ),
+            levels,
+        )
+
     def count_by_level(
         self,
         *,
@@ -270,12 +327,7 @@ class ReadingRepository:
         owns the rules, and this is the same comparison expressed in SQL so the
         rows never have to leave the database.
         """
-        is_err = (Reading.pm25 >= pm25_err) | (Reading.pm10 >= pm10_err)
-        is_warn = (Reading.pm25 >= pm25_warn) | (Reading.pm10 >= pm10_warn)
-
-        err = func.sum(case((is_err, 1), else_=0))
-        warn = func.sum(case((is_err, 0), (is_warn, 1), else_=0))
-        ok = func.sum(case((is_warn, 0), else_=1))
+        ok, warn, err = self._level_sums(pm25_warn, pm10_warn, pm25_err, pm10_err)
 
         row = (
             self.session.query(ok, warn, err)

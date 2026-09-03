@@ -133,10 +133,12 @@ class DashboardService:
 
     def summary(self, rng: TimeRange) -> dict:
         t = self._thresholds
+        # One session for the whole answer: the extremes, the level split and
+        # the hourly buckets were three round trips across two sessions to
+        # describe a single range.
         with self._db.session() as s:
             repo = ReadingRepository(s)
-            agg = repo.get_aggregate(start=rng.start, end=rng.end)
-            levels = repo.count_by_level(
+            agg, levels = repo.summarise(
                 start=rng.start,
                 end=rng.end,
                 pm25_warn=t.pm25_warn,
@@ -144,11 +146,11 @@ class DashboardService:
                 pm25_err=t.pm25_err,
                 pm10_err=t.pm10_err,
             )
-
-        if agg is None:
-            return {"range": _range_json(rng), "count": 0, "empty": True}
-
-        hourly = self._buckets(rng, 3600)
+            if agg is None:
+                return {"range": _range_json(rng), "count": 0, "empty": True}
+            hourly = repo.get_buckets(
+                start=rng.start, end=rng.end, bucket_seconds=3600,
+            )
         return {
             "range": _range_json(rng),
             "count": agg.count,
