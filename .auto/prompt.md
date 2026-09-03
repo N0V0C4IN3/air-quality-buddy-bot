@@ -155,18 +155,54 @@ never have.
 
 ## What's been tried
 
-Nothing yet - run 0 is the baseline, logged as the median of three consecutive
-measurements so that later single measurements compare against it without bias.
+Run 0 is the baseline (6665 ms, median of three). Runs 1-10 below; the log has
+the numbers and the `asi` for each.
 
-Setup findings worth keeping:
+**Kept, in order of what they were worth:**
 
-- Three fixes for the noisy wall clock were evaluated during setup. Raising
-  scheduler priority worked and is in `bench.py`. `process_time` and
-  canary-normalisation were both rejected, with numbers, above. Do not
-  re-derive them.
-- The fidelity guard was negative-tested during setup: feeding it 5-minute
-  averages fails it with `last_7d/pm25: peak lost - plotted 51.9, true 57.3`.
-  It works.
-- `service_calls` is 12 for a sweep: 8 window cards at 1 query each, plus 2
-  status cards at 2 each. `fanout_calls` is 102 for 100 subscribers: 100
-  per-chat theme lookups plus one `_recent` per rendered theme.
+1. **Reduce the window frame in SQL (run 1)** - the big one. `reports._frame`
+   now picks a bucket width from the span and goes through `get_buckets`.
+   6665 -> 3724 ms, `rows_to_python` 87360 -> 3120. Every point carries the
+   min/max behind it and the chart shades that band, because bucketing to
+   averages alone hides the spike an alert fired on.
+2. **Drop `bbox_inches="tight"` (run 3)** - it is a second full render pass.
+   3724 -> 1984 ms, status card 180 -> 92 ms. Every figure sets explicit
+   margins instead, and those margins are load-bearing.
+3. **dpi 150 -> 125 (run 5)** - the only lever that moves time and bytes at
+   once. 1875 -> 1781 ms and 611 -> 487 KB under a matched-canary A/B.
+4. **`Subscriptions.themes()` (run 2)** - `fanout_calls` 102 -> 3, flat in
+   subscriber count instead of linear.
+5. **`MAX_POINTS` 1500 -> 800 (run 7)** - sized to the card's own plot area
+   rather than borrowed from the dashboard. `rows_to_python` 3120 -> 240.
+6. **One look per alert (run 8)** - `get_recent(12)` + `get_first_since()`
+   instead of a whole hour, and `alert_reports()` renders every theme from one
+   look. `rows_to_python` 240 -> 26, `fanout_rows` 340 -> 13.
+7. **`summarise()` (run 6)** - extremes and level split in one scan.
+   `dash_calls` 12 -> 10.
+8. **`date2num` hoisted (run 4)** - 3.6% under a controlled A/B.
+9. **Postgres dialect tests (run 10)** - no metric movement; closes a risk this
+   session created by putting `get_buckets` under every card.
+
+**Rejected:**
+
+- **`text.hinting="none"` (run 9)** - 6% faster, 4% more bytes, blurrier
+  numerals. Wrong trade on a card people read values off.
+- **`process_time`, canary-normalisation** - see the noise floor section.
+- **Figure pooling** - measured: scaffolding is only 19 ms of a ~210 ms card,
+  and reusing figures risks state leaking between renders. Not worth it.
+
+**Where the time goes now** (~210 ms for a 7d card, and cards are even at
+190-260 ms): text layout and glyph rendering ~83 ms, `_frame` ~36 ms, figure
+scaffolding ~19 ms, PNG encode ~21 ms. Text is the largest and the hardest to
+cut without changing the design - roughly 45 text objects per card, of which
+the stats footer is 15 and the tick labels 19.
+
+**Two traps recorded for whoever picks this up:**
+
+- **A rendered-card cache would game this benchmark.** Reps 2 and 3 would hit
+  the cache and `min` would report near-zero. It is also speculative for a bot
+  serving one household. If it is ever wanted, measure the cold path first.
+- **`_frame`'s SQL cost is partly a SQLite artifact.** `get_buckets` groups on
+  `strftime('%s', ...)`, which parses text per row; Postgres uses
+  `extract('epoch')` on a real timestamptz. Do not spend iterations optimising
+  a cost production may not pay.
