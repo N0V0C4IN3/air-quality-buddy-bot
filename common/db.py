@@ -154,6 +154,31 @@ class ReadingRepository:
             .one_or_none()
         )
 
+    def get_recent(self, limit: int) -> list["Reading"]:
+        """The most recent `limit` readings, oldest first.
+
+        The status card needs a short sparkline and the newest value. Asking
+        for a whole hour and slicing it in Python hydrated a hundred and twenty
+        rows to use twelve.
+        """
+        rows = (
+            self.session.query(Reading)
+            .order_by(Reading.timestamp.desc())
+            .limit(max(1, limit))
+            .all()
+        )
+        return list(reversed(rows))
+
+    def get_first_since(self, start: datetime) -> Optional["Reading"]:
+        """The earliest reading at or after `start`, if there is one."""
+        return (
+            self.session.query(Reading)
+            .filter(Reading.timestamp >= start)
+            .order_by(Reading.timestamp.asc())
+            .limit(1)
+            .one_or_none()
+        )
+
     def get_range(
         self,
         *,

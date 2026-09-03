@@ -185,21 +185,29 @@ async def _on_alert(alert: Alert) -> None:
     # One render and one upload per theme, however many subscribers there are:
     # Telegram hands back a file_id for an uploaded photo, and re-sending that
     # id costs no bytes. Two themes means at most two of each.
-    cards: dict[str, Report] = {}
     uploaded: dict[str, str] = {}
 
     # One query for every subscriber's theme, not one per subscriber.
     theme_by_chat = subs.themes(subscribers)
 
+    # One render per distinct theme, from one look at the recent readings.
+    try:
+        cards: dict[str, Report] = reports.alert_reports(
+            alert.pm25, alert.pm10, alert.observed_at,
+            themes=set(theme_by_chat.values()),
+        )
+    except Exception:
+        # An alert that cannot be drawn must still arrive, as text.
+        log.exception("Could not render the alert card")
+        cards = {}
+
     for chat_id in subscribers:
         theme = theme_by_chat.get(chat_id, "light")
+        card = cards.get(theme)
+        if card is None:
+            await _deliver_alert_as_text(chat_id, alert)
+            continue
         try:
-            if theme not in cards:
-                cards[theme] = reports.alert_report(
-                    alert.pm25, alert.pm10, alert.observed_at, theme=theme,
-                )
-            card = cards[theme]
-
             sent = await bot.send_photo(
                 chat_id=chat_id,
                 photo=uploaded.get(theme) or _photo(card),

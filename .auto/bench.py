@@ -375,13 +375,21 @@ def run(reps: int, verbose: bool) -> dict:
     t0 = time.perf_counter()
     subscriber_ids = sorted(subs.all())
     theme_by_chat = resolve_themes(subs, subscriber_ids)
-    cards: dict[str, object] = {}
-    for chat_id in subscriber_ids:
-        theme = theme_by_chat[chat_id]
-        if theme not in cards:
-            cards[theme] = reports.alert_report(
-                88.0, 130.0, ANCHOR, theme=theme, now=ANCHOR,
-            )
+    # Mirror bot._on_alert: one render per distinct theme, one look at the
+    # recent readings for the whole fan-out. Prefers the bulk API when it
+    # exists so the benchmark tracks production rather than a copy of it.
+    make = getattr(reports, "alert_reports", None)
+    if callable(make):
+        cards = make(88.0, 130.0, ANCHOR,
+                     themes=set(theme_by_chat.values()), now=ANCHOR)
+    else:
+        cards = {}
+        for chat_id in subscriber_ids:
+            theme = theme_by_chat[chat_id]
+            if theme not in cards:
+                cards[theme] = reports.alert_report(
+                    88.0, 130.0, ANCHOR, theme=theme, now=ANCHOR,
+                )
     fanout_ms = (time.perf_counter() - t0) * 1000
     fanout_queries, fanout_rows, fanout_cache = counters.snapshot()
     fanout_renders = len(cards)

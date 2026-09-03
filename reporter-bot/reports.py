@@ -137,14 +137,15 @@ class ReadingReports:
         now = now or datetime.now(timezone.utc)
         with self._db.session() as s:
             repo = ReadingRepository(s)
-            latest = repo.get_latest()
-            if not latest:
+            # Only the sparkline's own points, not the whole hour behind them.
+            recent = repo.get_recent(SPARK_POINTS)
+            if not recent:
                 return None
-            recent = list(repo.get_range(start=now - timedelta(hours=1), end=now))
+            earliest = repo.get_first_since(now - timedelta(hours=1))
 
+        latest = recent[-1]
         observed_at = _as_utc(latest.timestamp)
-        earliest = recent[0] if recent else None
-        spark = [r.pm25 for r in recent][-SPARK_POINTS:]
+        spark = [r.pm25 for r in recent]
 
         return StatusView(
             pm25=latest.pm25,
@@ -188,32 +189,45 @@ class ReadingReports:
         # only repeats what the PNG already says.
         return Report(text="", chart=chart)
 
-    def alert_report(self, pm25: float, pm10: float, ts_utc: datetime, *,
-                     theme: str = "light", now: Optional[datetime] = None) -> Report:
-        """One alert as the same card the status button sends.
+    def alert_reports(self, pm25: float, pm10: float, ts_utc: datetime, *,
+                      themes, now: Optional[datetime] = None) -> dict:
+        """One card per theme, from a single look at the recent readings.
 
         The values come from the alert payload, not from a fresh query: the
-        message must describe the reading that tripped the threshold, even if a
-        newer one has landed since. The sparkline and the hour-ago comparison do
-        come from the DB — they are context, not the subject.
+        message must describe the reading that tripped the threshold, even if
+        a newer one has landed since. The sparkline and the hour-ago
+        comparison do come from the DB - they are context, not the subject -
+        and every theme wants the identical copy of them, so they are fetched
+        once for the whole fan-out rather than once per card.
         """
         now = now or datetime.now(timezone.utc)
         level = self._thresholds.level(pm25, pm10)
         spark, pm25_before, pm10_before = self._recent(now)
+        freshness = f"reading at {ts_utc.astimezone(self._tz):%H:%M}"
 
-        chart = status_card(
-            pm25=pm25,
-            pm10=pm10,
-            level=level.value,
-            thresholds=self._thresholds,
-            freshness=f"reading at {ts_utc.astimezone(self._tz):%H:%M}",
-            spark=spark,
-            pm25_before=pm25_before,
-            pm10_before=pm10_before,
-            palette=palette_for(theme),
-        )
-        chart.name = "alert.png"
-        return Report(text="", chart=chart)
+        cards = {}
+        for theme in themes:
+            chart = status_card(
+                pm25=pm25,
+                pm10=pm10,
+                level=level.value,
+                thresholds=self._thresholds,
+                freshness=freshness,
+                spark=spark,
+                pm25_before=pm25_before,
+                pm10_before=pm10_before,
+                palette=palette_for(theme),
+            )
+            chart.name = "alert.png"
+            cards[theme] = Report(text="", chart=chart)
+        return cards
+
+    def alert_report(self, pm25: float, pm10: float, ts_utc: datetime, *,
+                     theme: str = "light", now: Optional[datetime] = None) -> Report:
+        """One alert as the same card the status button sends."""
+        return self.alert_reports(
+            pm25, pm10, ts_utc, themes=(theme,), now=now,
+        )[theme]
 
     def alert_text(self, pm25: float, pm10: float, ts_utc: datetime) -> str:
         """Text fallback — used when a render fails; an alert must still arrive."""
@@ -263,16 +277,21 @@ class ReadingReports:
     # ---------- internals ----------
 
     def _recent(self, now: datetime):
-        """The last hour as (sparkline points, pm25 an hour ago, pm10 an hour ago)."""
+        """The last hour as (sparkline points, pm25 an hour ago, pm10 an hour ago).
+
+        Two narrow queries rather than one wide one: the card draws twelve
+        points and compares against a single reading an hour back, so pulling
+        the intervening hour was work nothing ever looked at.
+        """
         with self._db.session() as s:
-            recent = list(ReadingRepository(s).get_range(
-                start=now - timedelta(hours=1), end=now,
-            ))
+            repo = ReadingRepository(s)
+            recent = repo.get_recent(SPARK_POINTS)
+            earliest = repo.get_first_since(now - timedelta(hours=1))
         if not recent:
             return [], None, None
-        earliest = recent[0]
-        return ([r.pm25 for r in recent][-SPARK_POINTS:],
-                earliest.pm25, earliest.pm10)
+        if earliest is None:
+            return [r.pm25 for r in recent], None, None
+        return ([r.pm25 for r in recent], earliest.pm25, earliest.pm10)
 
     def _frame(self, start: datetime, end: datetime) -> pd.DataFrame:
         """The plotted data for a range, reduced in SQL when it is too dense.
