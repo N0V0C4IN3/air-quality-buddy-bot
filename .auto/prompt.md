@@ -180,8 +180,19 @@ the numbers and the `asi` for each.
 7. **`summarise()` (run 6)** - extremes and level split in one scan.
    `dash_calls` 12 -> 10.
 8. **`date2num` hoisted (run 4)** - 3.6% under a controlled A/B.
-9. **Postgres dialect tests (run 10)** - no metric movement; closes a risk this
-   session created by putting `get_buckets` under every card.
+9. **Palette PNGs from the canvas buffer (run 13)** - the best byte result of
+   the run and free on time. `bytes_total` 488 -> 148 KB *and* card_ms_total
+   2964 -> 2845, because encoding a palette PNG is cheaper than encoding RGBA
+   by more than the quantise costs. Use FASTOCTREE, not the default median cut.
+10. **Four y gridlines (run 14)** - tick labels were 19 of ~45 text objects.
+    -6% isolated, and the gridlines now land on the warn/high limits.
+11. **Postgres dialect tests (run 10)** - no metric movement; closes a risk this
+    session created by putting `get_buckets` under every card.
+12. **`Window.bucket_floor_seconds` (run 12)** - the heatmap asks for hourly
+    buckets. Too small for the sweep to see; kept because a count-weighted
+    hourly mean is more correct than averaging four bucket means in pandas.
+13. **Series at 1dp (run 11)** - `dash_bytes` 52.4 -> 50.7 KB, and the second
+    decimal was invented on the way out.
 
 **Rejected:**
 
@@ -191,11 +202,24 @@ the numbers and the `asi` for each.
 - **Figure pooling** - measured: scaffolding is only 19 ms of a ~210 ms card,
   and reusing figures risks state leaking between renders. Not worth it.
 
-**Where the time goes now** (~210 ms for a 7d card, and cards are even at
-190-260 ms): text layout and glyph rendering ~83 ms, `_frame` ~36 ms, figure
-scaffolding ~19 ms, PNG encode ~21 ms. Text is the largest and the hardest to
-cut without changing the design - roughly 45 text objects per card, of which
-the stats footer is 15 and the tick labels 19.
+**Where the time goes now.** Text layout and glyph rendering is the largest
+single item; `_frame` is next but is partly a SQLite artifact; figure
+scaffolding is ~19 ms and not worth pooling. After run 14 the tick labels are
+down to ~15 text objects, leaving the stats footer (15) as the biggest
+remaining block - and that one is deliberate design (CLAUDE.md: the table left
+a `<pre>` block precisely so decimal points stack in proportional type).
+
+**Every tracked metric is now close to its floor**: `rows_to_python` 26,
+`service_calls` 12 (one per card, two per status card), `fanout_calls` 3 and
+flat in both subscribers and themes, `bytes_total` 145 KB after palettising.
+Further work on the primary means micro-tuning below the noise floor, which is
+why the remaining ideas in `ideas.md` are all marked small.
+
+**Measure only on a quiet machine.** Check `canary_ms` before believing
+anything: ~32 is quiet, >55 is contended, and it reached 94 during this run.
+For anything worth less than ~15%, isolate the affected cards and time them
+directly rather than re-running the 8-card sweep - that is how runs 12 and 14
+were settled.
 
 **Two traps recorded for whoever picks this up:**
 
