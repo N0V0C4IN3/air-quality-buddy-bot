@@ -1,0 +1,1 @@
+{ "metric": "card_ms_total", "direction": "lower", "maxIterations": 30 }
