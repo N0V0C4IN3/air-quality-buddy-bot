@@ -175,6 +175,13 @@ jobs:
           alembic downgrade -1
           alembic upgrade head
 
+      # The suite runs on SQLite, so the `extract('epoch')` branch of
+      # get_buckets is never executed by it. That branch is now under every
+      # chart card the bot sends, not just the dashboard, so it gets checked
+      # here where there is a real Postgres to check it against.
+      - name: The Postgres-only half of the repository
+        run: python -m pytest tests/test_postgres_dialect.py -q -rs
+
       # `alembic upgrade head` alone is the whole schema now - no create_all
       # anywhere - so autogenerate seeing anything at all means a model changed
       # without a migration to carry it.
