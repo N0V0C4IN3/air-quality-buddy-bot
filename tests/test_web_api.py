@@ -111,6 +111,31 @@ def test_level_counts_match_the_threshold_rules(seeded, thresholds):
     assert levels["ok"] == 480
 
 
+def test_summarise_agrees_with_the_two_queries_it_replaces(seeded, thresholds):
+    window = dict(start=START, end=START + timedelta(days=2))
+    limits = dict(
+        pm25_warn=thresholds.pm25_warn, pm10_warn=thresholds.pm10_warn,
+        pm25_err=thresholds.pm25_err, pm10_err=thresholds.pm10_err,
+    )
+    with seeded.session() as s:
+        repo = ReadingRepository(s)
+        agg, levels = repo.summarise(**window, **limits)
+
+        assert agg == repo.get_aggregate(**window)
+        assert levels == repo.count_by_level(**window, **limits)
+
+
+def test_summarise_of_an_empty_range_is_none_with_zero_counts(db, thresholds):
+    with db.session() as s:
+        agg, levels = ReadingRepository(s).summarise(
+            start=START, end=START + timedelta(hours=1),
+            pm25_warn=thresholds.pm25_warn, pm10_warn=thresholds.pm10_warn,
+            pm25_err=thresholds.pm25_err, pm10_err=thresholds.pm10_err,
+        )
+    assert agg is None
+    assert levels == {"ok": 0, "warn": 0, "err": 0}
+
+
 def test_aggregate_of_an_empty_range_is_none(db):
     with db.session() as s:
         assert ReadingRepository(s).get_aggregate(

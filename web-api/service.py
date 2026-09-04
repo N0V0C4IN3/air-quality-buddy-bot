@@ -117,15 +117,20 @@ class DashboardService:
             "bucket": {"name": name, "seconds": seconds},
             "count": sum(b.count for b in buckets),
             "t": [int(b.start.timestamp()) for b in buckets],
+            # One decimal, because that is the sensor's own precision - the
+            # readings behind these are stored rounded to 0.1 ug/m3 and the
+            # page renders them with toFixed(1). The second decimal was
+            # invented on the way out and paid for on every poll, and the page
+            # re-polls for as long as a tab stays open.
             "pm25": {
-                "avg": [round(b.pm25_avg, 2) for b in buckets],
-                "min": [round(b.pm25_min, 2) for b in buckets],
-                "max": [round(b.pm25_max, 2) for b in buckets],
+                "avg": [round(b.pm25_avg, 1) for b in buckets],
+                "min": [round(b.pm25_min, 1) for b in buckets],
+                "max": [round(b.pm25_max, 1) for b in buckets],
             },
             "pm10": {
-                "avg": [round(b.pm10_avg, 2) for b in buckets],
-                "min": [round(b.pm10_min, 2) for b in buckets],
-                "max": [round(b.pm10_max, 2) for b in buckets],
+                "avg": [round(b.pm10_avg, 1) for b in buckets],
+                "min": [round(b.pm10_min, 1) for b in buckets],
+                "max": [round(b.pm10_max, 1) for b in buckets],
             },
         }
 
@@ -133,10 +138,12 @@ class DashboardService:
 
     def summary(self, rng: TimeRange) -> dict:
         t = self._thresholds
+        # One session for the whole answer: the extremes, the level split and
+        # the hourly buckets were three round trips across two sessions to
+        # describe a single range.
         with self._db.session() as s:
             repo = ReadingRepository(s)
-            agg = repo.get_aggregate(start=rng.start, end=rng.end)
-            levels = repo.count_by_level(
+            agg, levels = repo.summarise(
                 start=rng.start,
                 end=rng.end,
                 pm25_warn=t.pm25_warn,
@@ -144,11 +151,11 @@ class DashboardService:
                 pm25_err=t.pm25_err,
                 pm10_err=t.pm10_err,
             )
-
-        if agg is None:
-            return {"range": _range_json(rng), "count": 0, "empty": True}
-
-        hourly = self._buckets(rng, 3600)
+            if agg is None:
+                return {"range": _range_json(rng), "count": 0, "empty": True}
+            hourly = repo.get_buckets(
+                start=rng.start, end=rng.end, bucket_seconds=3600,
+            )
         return {
             "range": _range_json(rng),
             "count": agg.count,
