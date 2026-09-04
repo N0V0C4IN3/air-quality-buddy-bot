@@ -19,8 +19,10 @@ matplotlib.use("Agg")  # no display on the Pi
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import numpy as np
 import pandas as pd
+from PIL import Image  # ships with matplotlib; not a new dependency
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Rectangle
 
@@ -45,6 +47,12 @@ SEQUENTIAL = [
 
 # A quiet day must look quiet: never scale the y-axis tighter than this.
 Y_FLOOR = 25.0
+
+# Raster density for every card. Telegram re-encodes an uploaded photo anyway,
+# so pixels above what it keeps cost upload bytes and render time and buy
+# nothing. Drives glyph rasterisation and PNG encoding together - the two
+# largest items in a card's profile after the query.
+DPI = 125
 
 
 @dataclass(frozen=True)
@@ -95,25 +103,33 @@ def _style_axes(ax, p: Palette) -> None:
         ax.spines[side].set_linewidth(1)
     ax.grid(True, axis="y", color=p.grid, linewidth=1)
     ax.set_axisbelow(True)
+    # Four gridlines is enough to read a value off, and every tick is a text
+    # object plus a line - the largest single cost in a card is glyph layout.
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=4, steps=[1, 2, 2.5, 5, 10]))
     ax.tick_params(colors=p.muted, labelsize=9, length=0)
     ax.set_ylabel("µg/m³", color=p.muted, fontsize=9)
 
 
-def _span(times) -> tuple:
+# Matplotlib's date axis is a float count of days, which is why everything
+# below works in that unit: converting the timestamps once and passing floats
+# to every plot call avoids re-running date2num for each of them.
+HALF_HOUR = 30 / (24 * 60)
+
+
+def _span(x) -> tuple:
     """x-limits that stay valid when a window holds a single reading."""
-    first, last = times.iloc[0], times.iloc[-1]
+    first, last = float(x[0]), float(x[-1])
     if first == last:
-        pad = pd.Timedelta(minutes=30)
-        return first - pad, last + pad
+        return first - HALF_HOUR, last + HALF_HOUR
     return first, last
 
 
-def _time_axis(ax, times, tz, *, multiday: bool) -> None:
+def _time_axis(ax, x, tz, *, multiday: bool) -> None:
     locator = mdates.AutoDateLocator(minticks=4, maxticks=7)
     ax.xaxis.set_major_locator(locator)
     fmt = "%a %d" if multiday else "%H:%M"
     ax.xaxis.set_major_formatter(mdates.DateFormatter(fmt, tz=tz))
-    ax.set_xlim(*_span(times))
+    ax.set_xlim(*_span(x))
 
 
 def _smooth(values: np.ndarray, window: int) -> np.ndarray:
@@ -160,12 +176,25 @@ def stats_rows(df: pd.DataFrame, thresholds: Thresholds,
     meaning alone.
     """
     rows = []
+    counts = df["n"].astype(float) if "n" in df.columns else None
     for label, key, warn, high in (
         ("PM2.5", "pm25", thresholds.pm25_warn, thresholds.pm25_err),
         ("PM10", "pm10", thresholds.pm10_warn, thresholds.pm10_err),
     ):
         values = df[key].astype(float)
-        top = float(values.max())
+        # A bucketed frame carries the true extremes beside the average; the
+        # min/max of the averages would understate both.
+        low_col, high_col = f"{key}_min", f"{key}_max"
+        bottom = (float(df[low_col].min()) if low_col in df.columns
+                  else float(values.min()))
+        top = (float(df[high_col].max()) if high_col in df.columns
+               else float(values.max()))
+        if counts is not None and float(counts.sum()) > 0:
+            # Count-weighted, so a partial bucket at either edge does not pull
+            # the mean the way an average of averages would.
+            average = float((values * counts).sum() / counts.sum())
+        else:
+            average = float(values.mean())
         if top >= high:
             peak, colour = "high", BAND_HIGH
         elif top >= warn:
@@ -174,8 +203,8 @@ def stats_rows(df: pd.DataFrame, thresholds: Thresholds,
             peak, colour = "ok", palette.muted
         rows.append(StatRow(
             label=label,
-            minimum=f"{float(values.min()):.1f}",
-            average=f"{float(values.mean()):.1f}",
+            minimum=f"{bottom:.1f}",
+            average=f"{average:.1f}",
             maximum=f"{top:.1f}",
             peak=peak,
             colour=colour,
@@ -208,10 +237,40 @@ def _stats_footer(ax, rows: list[StatRow], p: Palette, *, samples: int) -> None:
                     fontsize=9.5, fontweight="bold" if emphasis else "normal")
 
 
+# A chart is flat colour: a background, a grid, two series, two band fills and
+# antialiased text. That fits a palette with room to spare, and a palette PNG
+# is a third the size of the truecolour one matplotlib writes.
+PALETTE_COLOURS = 255
+
+
 def _to_png(fig) -> BytesIO:
-    bio = BytesIO()
-    fig.savefig(bio, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
+    """Draw once, then write a palette PNG straight from the canvas.
+
+    Two things are going on.
+
+    `bbox_inches="tight"` is not used: it costs a whole extra render pass - it
+    draws once to find out how big everything came out, then crops and draws
+    again - measured at ~57 ms of a ~376 ms card. Every figure here sets its
+    own margins instead, which also makes the output size predictable rather
+    than a function of how long the tick labels happened to be.
+
+    And the bytes go out palettised. `savefig` writes truecolour RGBA; taking
+    the canvas buffer and quantising it costs ~18 ms and returns about a third
+    of the bytes. That looks like a bad trade against render time alone, and
+    is not: these PNGs are uploaded to Telegram from a Raspberry Pi on a home
+    uplink, where 60 KB saved is worth far more than 18 ms spent. FASTOCTREE
+    rather than the default median cut - a quarter of the cost for slightly
+    better output on flat-colour art.
+    """
+    fig.canvas.draw()
+    frame = np.asarray(fig.canvas.buffer_rgba())
     plt.close(fig)
+
+    image = Image.fromarray(frame).convert("RGB").quantize(
+        colors=PALETTE_COLOURS, method=Image.Quantize.FASTOCTREE,
+    )
+    bio = BytesIO()
+    image.save(bio, format="png")
     bio.seek(0)
     return bio
 
@@ -238,54 +297,75 @@ def window_chart(
 
     p = palette
     frame = df.sort_values("timestamp")
-    times = _local_times(frame, tz)
+    # Once per card, not once per plot call. The profile showed date2num and
+    # the pandas iteration behind it costing ~50ms of a ~380ms card, because
+    # every plot, fill_between, annotate and text call converted afresh.
+    x = mdates.date2num(_local_times(frame, tz))
 
-    fig = plt.figure(figsize=(7, 5.4), dpi=150, facecolor=p.surface)
-    gs = fig.add_gridspec(3, 1, height_ratios=[1, 1, 0.42], hspace=0.32)
+    fig = plt.figure(figsize=(7, 5.4), dpi=DPI, facecolor=p.surface)
+    gs = fig.add_gridspec(3, 1, height_ratios=[1, 1, 0.42], hspace=0.32,
+                          left=0.105, right=0.935, top=0.872, bottom=0.075)
     axes = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
     footer = fig.add_subplot(gs[2])
     axes[1].sharex(axes[0])
     axes[0].tick_params(labelbottom=False)
 
+    def _series(key: str):
+        """The line, and the band it stands for. Identical arrays on raw data."""
+        values = frame[key].to_numpy(float)
+        low = (frame[f"{key}_min"].to_numpy(float)
+               if f"{key}_min" in frame.columns else values)
+        high = (frame[f"{key}_max"].to_numpy(float)
+                if f"{key}_max" in frame.columns else values)
+        return values, low, high
+
     panes = (
-        (axes[0], frame["pm25"].to_numpy(float), p.pm25, "PM2.5",
+        (axes[0], _series("pm25"), p.pm25, "PM2.5",
          thresholds.pm25_warn, thresholds.pm25_err),
-        (axes[1], frame["pm10"].to_numpy(float), p.pm10, "PM10",
+        (axes[1], _series("pm10"), p.pm10, "PM10",
          thresholds.pm10_warn, thresholds.pm10_err),
     )
 
-    for ax, values, colour, label, warn, high in panes:
+    for ax, (values, lows, highs), colour, label, warn, high in panes:
         _style_axes(ax, p)
-        top = max(high * 1.12, float(values.max()) * 1.2, Y_FLOOR)
+        top = max(high * 1.12, float(highs.max()) * 1.2, Y_FLOOR)
 
         ax.axhspan(warn, high, color=BAND_WARN, alpha=BAND_ALPHA, linewidth=0, zorder=0)
         ax.axhspan(high, top, color=BAND_HIGH, alpha=BAND_ALPHA, linewidth=0, zorder=0)
-        ax.text(times.iloc[0], warn, f"  warn ≥{warn:g}", va="bottom", ha="left",
+        ax.text(x[0], warn, f"  warn ≥{warn:g}", va="bottom", ha="left",
                 color=p.muted, fontsize=8)
-        ax.text(times.iloc[0], high, f"  high ≥{high:g}", va="bottom", ha="left",
+        ax.text(x[0], high, f"  high ≥{high:g}", va="bottom", ha="left",
                 color=p.muted, fontsize=8)
 
+        # Where a point stands for several readings, shade what it covers.
+        # Without this the averaged line would quietly flatten every spike -
+        # and a spike is the thing this product exists to show.
+        if bool((highs > lows).any()):
+            ax.fill_between(x, lows, highs, color=colour, alpha=0.20,
+                            linewidth=0, zorder=1)
+
         if smooth_window > 1 and len(values) > smooth_window:
-            ax.plot(times, values, color=colour, linewidth=0, marker=".",
+            ax.plot(x, values, color=colour, linewidth=0, marker=".",
                     markersize=2, alpha=0.28, zorder=2)
-            ax.plot(times, _smooth(values, smooth_window), color=colour,
+            ax.plot(x, _smooth(values, smooth_window), color=colour,
                     linewidth=2.2, zorder=3, solid_capstyle="round")
         else:
-            ax.plot(times, values, color=colour, linewidth=2, zorder=3,
+            ax.plot(x, values, color=colour, linewidth=2, zorder=3,
                     solid_capstyle="round")
 
         ax.set_ylim(0, top)
         ax.set_title(label, color=p.ink_2, fontsize=10, fontweight="bold",
                      loc="left", pad=4)
-        ax.annotate(f"{values[-1]:.0f}", xy=(times.iloc[-1], values[-1]),
+        ax.annotate(f"{values[-1]:.0f}", xy=(x[-1], values[-1]),
                     xytext=(6, 0), textcoords="offset points", va="center",
                     color=colour, fontsize=9.5, fontweight="bold")
 
-    _time_axis(axes[1], times, tz, multiday=multiday)
-    axes[0].set_xlim(*_span(times))
-    _stats_footer(footer, stats_rows(frame, thresholds, p), p, samples=len(frame))
+    _time_axis(axes[1], x, tz, multiday=multiday)
+    axes[0].set_xlim(*_span(x))
+    total = int(frame["n"].sum()) if "n" in frame.columns else len(frame)
+    _stats_footer(footer, stats_rows(frame, thresholds, p), p, samples=total)
     fig.suptitle(title, color=p.ink, fontsize=12, fontweight="bold",
-                 x=0.125, ha="left", y=0.99)
+                 x=0.105, ha="left", y=0.965)
 
     return _to_png(fig)
 
@@ -342,7 +422,7 @@ def status_card(
     headline = Level(level).label
     level_colour = LEVEL_COLOUR[level]
 
-    fig = plt.figure(figsize=(7, 3.7), dpi=150, facecolor=p.surface)
+    fig = plt.figure(figsize=(7, 3.7), dpi=DPI, facecolor=p.surface)
     ax = fig.add_axes([0.04, 0.04, 0.92, 0.92])
     ax.set_axis_off()
     ax.set_xlim(0, 1)
@@ -467,7 +547,10 @@ def hour_heatmap(
     )
 
     cmap = LinearSegmentedColormap.from_list("air-quality", SEQUENTIAL)
-    fig, ax = plt.subplots(figsize=(7, 3.1), dpi=150, facecolor=p.surface)
+    fig, ax = plt.subplots(figsize=(7, 3.1), dpi=DPI, facecolor=p.surface)
+    # Explicit margins because the figure is saved at its own size: the
+    # worst/best-hour line sits below the axes and would otherwise be cropped.
+    fig.subplots_adjust(left=0.098, right=0.94, top=0.88, bottom=0.26)
     ax.set_facecolor(p.surface)
 
     values = grid.to_numpy(dtype=float)
