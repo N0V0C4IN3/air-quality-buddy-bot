@@ -1,0 +1,16 @@
+# Everything the test suite needs. No Postgres, Redis, RabbitMQ or sensor
+# required: the tests run against SQLite, an in-memory cache and fake serial.
+#   python -m pip install -r requirements-dev.txt
+#   python -m pytest
+pytest>=8.0
+sqlalchemy==2.0.52
+pandas>=2.2
+matplotlib>=3.9
+pyserial==3.5
+pika            # sensor-reader/publisher.py, imported via main.py
+redis
+alembic         # tests/test_migrations.py runs the real migration scripts
+python-dotenv   # alembic/env.py imports it
+tzdata          # Windows has no system tz database
+fastapi         # tests/test_web_api.py exercises the dashboard routes
+httpx           # fastapi.testclient needs it

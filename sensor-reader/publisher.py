@@ -1,29 +1,58 @@
 # sensor-reader/publisher.py
-import os
-import json
-import time
+"""Blocking-pika adapter for the alert seam.
+
+Knows how to get an `Alert` onto the exchange and nothing about what an alert
+means — the payload shape and routing key belong to `common.alerts`.
+"""
+from __future__ import annotations
+
 import logging
+import time
+
 import pika
-from pika.adapters.blocking_connection import BlockingChannel
 from pika import exceptions as px
+from pika.adapters.blocking_connection import BlockingChannel
+
+from common.alerts import Alert
 
 log = logging.getLogger(__name__)
 
+
 class Publisher:
-    def __init__(self):
-        self.host = os.environ["RABBITMQ_HOST"]
-        self.port = int(os.environ.get("RABBITMQ_PORT", "5672"))
-        self.user = os.environ["RABBITMQ_USER"]
-        self.pwd  = os.environ["RABBITMQ_PASS"]
-
-        self.exchange = os.environ["AQ_EXCHANGE"]
-        self.exchange_type = os.environ.get("AQ_EXCHANGE_TYPE", "topic")
-
-        # Keep heartbeats modest since we’ll let the connection drop between cycles
-        self.heartbeat = int(os.environ.get("AMQP_HEARTBEAT", "30"))
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        user: str,
+        password: str,
+        exchange: str,
+        exchange_type: str = "topic",
+        heartbeat: int = 30,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.user = user
+        self.pwd = password
+        self.exchange = exchange
+        self.exchange_type = exchange_type
+        # Keep heartbeats modest since we let the connection drop between cycles
+        self.heartbeat = heartbeat
 
         self.conn = None
         self.channel: BlockingChannel | None = None
+
+    @classmethod
+    def from_settings(cls, settings) -> "Publisher":
+        return cls(
+            host=settings.rabbitmq_host,
+            port=settings.rabbitmq_port,
+            user=settings.rabbitmq_user,
+            password=settings.rabbitmq_pass,
+            exchange=settings.exchange,
+            exchange_type=settings.exchange_type,
+            heartbeat=settings.amqp_heartbeat,
+        )
 
     # ---------- connection helpers ----------
 
@@ -69,33 +98,25 @@ class Publisher:
 
     # ---------- publishing with one retry ----------
 
-    def publish_alert(self, kind: str, pm25_value: float, pm10_value: float, unit: str, ts: float):
+    def publish(self, alert: Alert) -> None:
         """
         Try once; on failure reconnect and retry once.
         Raise if it still fails.
         """
-        body = {
-            "type": kind,
-            "pm25_value": pm25_value,
-            "pm10_value": pm10_value,
-            "unit": unit,
-            "ts": ts,
-        }
-        payload = json.dumps(body)
+        body = alert.encode()
 
         def _do_publish():
-            rk = f"alerts.{kind}"
             self.channel.basic_publish(
                 exchange=self.exchange,
-                routing_key=rk,
-                body=payload,
+                routing_key=alert.routing_key,
+                body=body,
                 properties=pika.BasicProperties(
                     content_type="application/json",
                     delivery_mode=2,  # persistent
                 ),
                 mandatory=False,
             )
-            log.info("[Publisher] Sent %s: %s", rk, body)
+            log.info("[Publisher] Sent %s: %s", alert.routing_key, body.decode("utf-8"))
 
         # First attempt (open if needed)
         self._ensure_open()
