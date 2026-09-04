@@ -137,3 +137,23 @@ def test_upsert_does_not_commit_on_its_own(db):
         assert s.in_transaction()
 
     assert stored_state(db, 99) is True
+
+
+def test_themes_answers_for_many_chats_at_once(subs):
+    subs.subscribe(1)
+    subs.subscribe(2)
+    subs.set_theme(2, "dark")
+
+    # 3 has never been seen; it gets the default rather than going missing.
+    assert subs.themes([1, 2, 3]) == {1: "light", 2: "dark", 3: "light"}
+
+
+def test_themes_of_nothing_asks_the_database_nothing(subs):
+    assert subs.themes([]) == {}
+
+
+def test_themes_agrees_with_theme(subs):
+    subs.subscribe(7)
+    subs.set_theme(7, "dark")
+
+    assert subs.themes([7])[7] == subs.theme(7)
