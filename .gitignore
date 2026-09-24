@@ -208,3 +208,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# /run-air-quality-buddy-bot driver artefacts: the SQLite dev DB, rendered
+# PNGs, dashboard screenshots and the web-api log.
+.run-out/
+
+# uPlot is vendored into the image by web-api/Dockerfile at build time; the
+# driver fetches the same version locally so the page has charts outside Docker.
+web-api/static/vendor/*
+!web-api/static/vendor/.gitkeep
+
+# /autoresearch session directory; the run itself lives on its autoresearch/* branch.
+.auto/

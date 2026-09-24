@@ -79,6 +79,54 @@ services:
     env_file:
       - .env
 
+  web-api:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: web-api/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    # Published on localhost only: the tunnel reaches it over the compose
+    # network, so nothing needs to listen on the Pi's LAN address. Change to
+    # "8080:8080" if you want to open it on the LAN instead.
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/api/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # Outbound-only tunnel: no port forwarding, no inbound firewall rule, TLS
+  # terminated by Cloudflare. Create the tunnel once in the Cloudflare
+  # dashboard, point its public hostname at http://web-api:8080, and put the
+  # token in .env. Comment this service out to run on the LAN only.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - web-api
+    profiles: ["tunnel"]
+
+  # A throwaway tunnel for looking at the dashboard before there is a domain.
+  # Needs no account, no token and no DNS: Cloudflare invents a random
+  # *.trycloudflare.com hostname and prints it to the log. That hostname is
+  # regenerated on every restart, so it can never be DASHBOARD_URL — the named
+  # `cloudflared` service above is still the permanent path.
+  cloudflared-quick:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://web-api:8080
+    depends_on:
+      - web-api
+    profiles: ["quicktunnel"]
+
   housekeeper:
     build:
       context: .
