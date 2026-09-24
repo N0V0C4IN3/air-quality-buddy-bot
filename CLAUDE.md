@@ -18,21 +18,9 @@ Four Python services around a Postgres DB, a RabbitMQ broker and Redis, orchestr
 
 All builds use the repo root as Docker build context (`context: .`, `dockerfile: <svc>/Dockerfile`), because each image copies `common/` (and, except web-api, `alembic/`).
 
-```bash
-docker compose up --build -d                 # all services
-docker compose --profile tunnel up -d        # ...plus the Cloudflare tunnel
-docker compose up --build db reporter-bot -d # one service (always bring up its deps)
-docker compose logs -f reporter-bot
-docker compose down
-```
+The tunnel is behind a compose profile: `docker compose --profile tunnel up -d`.
 
-Migrations run automatically on container start (`alembic upgrade head && python …` in the sensor-reader and reporter-bot Dockerfiles). To author one locally, `DATABASE_URL` must be set (`alembic/env.py` reads it from env/`.env` and overrides `sqlalchemy.url`):
-
-```bash
-alembic revision --autogenerate -m "message"
-alembic upgrade head
-alembic downgrade -1
-```
+Migrations run automatically on container start (`alembic upgrade head && python …` in the sensor-reader and reporter-bot Dockerfiles). To author one locally, `DATABASE_URL` must be set — `alembic/env.py` reads it from env/`.env` and overrides `sqlalchemy.url`.
 
 ### Tests
 
@@ -40,13 +28,8 @@ The suite runs on Windows with no Postgres, Redis, RabbitMQ or sensor attached �
 SQLite on a temp file, an in-memory subscriber cache, a fake serial port.
 
 ```bash
-python -m pip install -r requirements-dev.txt
-python -m pytest                      # whole suite
-python -m pytest tests/test_reports.py # one file
-python -m pytest -k cooldown           # one behaviour
-python -m pytest tests/test_migrations.py  # runs the real Alembic scripts on SQLite
-python -m pytest tests/test_alerting.py::test_escalation_is_never_suppressed
-python -m pytest tests/test_web_api.py     # dashboard routes over SQLite, no server
+python -m pip install -r requirements-dev.txt   # pytest alone is not enough
+python -m pytest
 ```
 
 Root `conftest.py` does the path setup: the services are not packages, so their
@@ -58,7 +41,11 @@ testable modules take their dependencies as arguments and never import config).
 Each config module calls `Settings.load()` at import, so `conftest.py` sets the
 sensor-reader variables before collection.
 
-There is no linter or CI config in this repo.
+No linter. CI is `.github/workflows/ci.yml`: the suite on 3.11 and 3.14, the
+suite again with reporter-bot's requirements installed so the aiogram-dependent
+tests run rather than skip, all four images built with each entrypoint imported
+inside its own image, and migrations applied/rolled back with a models-vs-schema
+drift check on Postgres.
 
 ## Things to know
 
@@ -114,17 +101,3 @@ There is no linter or CI config in this repo.
   plain-http URL, and that failure would take down every chart card, not just the button —
   so `reporter-bot/config.py` rejects it at boot and an unset value simply hides the button.
 - **Config is parsed once, at boot.** Each service's `Settings.load()` reads its whole environment and raises `ConfigError` on a missing required value. Don't reach for `os.getenv` elsewhere — add the field to `Settings`.
-
-## Configuration
-
-All services read a root `.env` via `env_file`. Beyond the variables documented in README.md, the code also requires:
-
-- `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASS`, `AQ_EXCHANGE`, `AQ_EXCHANGE_TYPE`, `AMQP_HEARTBEAT` — sensor-reader publisher
-- `AMQP_URL`, `AQ_EXCHANGE`, `AQ_QUEUE_REPORTER`, `AMQP_PREFETCH`, `AMQP_RETRY_DELAY` — reporter-bot consumer. `AQ_ROUTING_KEYS` is optional now; unset means the `alerts.warn` + `alerts.err` bindings from `common.alerts.binding_keys()`.
-- `REDIS_HOST`, `REDIS_PORT` — reporter-bot
-- `WEB_AUTH_MODE`, `WEB_ACCESS_TOKEN`, `WEB_PORT`, `WEB_MAX_POINTS`,
-  `WEB_INIT_DATA_MAX_AGE` — web-api. It also reads `TELEGRAM_TOKEN` (to verify Mini App
-  signatures) and `PRUNE_MAX_AGE_DAYS` (to tell the page how far back data goes).
-- `DASHBOARD_URL` — optional, reporter-bot. HTTPS only; unset hides the Mini App buttons.
-- `CLOUDFLARE_TUNNEL_TOKEN` — only used by `docker compose --profile tunnel`.
-- `DRY_RUN=true` — `build_sampler` returns a `FakeSampler` instead of touching serial hardware (also implied when `SDS011_PORT` is unset). Use this to develop without the sensor.
