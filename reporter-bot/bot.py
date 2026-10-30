@@ -1,9 +1,13 @@
 import asyncio
+import functools
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import MenuButtonWebApp, WebAppInfo
+from aiogram.utils.exceptions import MessageNotModified
 
 from common.alerts import Alert
 from common.db import Database
@@ -12,6 +16,7 @@ from config import settings
 from consumer import AsyncConsumer
 from html_helpers import info_text
 import callbacks
+from keyboard_layout import other_theme
 from markup import card_markup
 from reports import STATUS, ReadingReports, Report, View, Window
 from subscriber_cache import RedisSubscriberCache
@@ -34,13 +39,31 @@ reports = ReadingReports(
     reading_interval_seconds=settings.reading_interval_seconds,
 )
 
-NO_READINGS = "No readings yet."
 MENU_MOVED = "The buttons now live under each card."
+STALE_BUTTON = "This button is out of date. Send /status for a fresh card."
+FAILED = "Something went wrong drawing that. Try again in a moment."
+
+# Charts render off the event loop, so a slow matplotlib pass on the Pi does not
+# stall every other chat. One worker: pyplot keeps global state.
+_renderer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="render")
 
 
-def card_buttons(chat_id: int, view: View, theme: str):
-    return card_markup(view, theme=theme, subscribed=subs.is_subscribed(chat_id),
-                       dashboard_url=settings.dashboard_url)
+async def render(view: View, theme: str) -> Report:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _renderer, functools.partial(reports.for_view, view, theme=theme))
+
+
+def is_private(chat_id: int) -> bool:
+    """Private chats have the user's (positive) id; groups and channels are negative."""
+    return chat_id > 0
+
+
+def card_buttons(chat_id: int, on: Optional[View], *, theme: str, subscribed: bool):
+    # Telegram accepts a web_app button only in a private chat; in a group it
+    # rejects the whole message, so there the Dashboard button is left off.
+    url = settings.dashboard_url if is_private(chat_id) else ""
+    return card_markup(on, theme=theme, subscribed=subscribed, dashboard_url=url)
 
 
 def _photo(report: Report) -> types.InputFile:
@@ -48,43 +71,35 @@ def _photo(report: Report) -> types.InputFile:
     return types.InputFile(report.chart, filename=report.chart.name)
 
 
-def render(view: View, theme: str) -> Optional[Report]:
-    """The card for one view; None only for Status before the first reading."""
-    if view is STATUS:
-        return reports.status_report(theme=theme)
-    return reports.for_window(view, theme=theme)
+async def _send(chat_id: int, report: Report, buttons) -> None:
+    """A card with nothing to draw goes out as text, still with the buttons,
+    so the chat is never left without a menu."""
+    if report.is_empty:
+        await bot.send_message(chat_id, report.text, reply_markup=buttons,
+                               disable_web_page_preview=True)
+    else:
+        await bot.send_photo(chat_id, photo=_photo(report),
+                             caption=report.text or None, reply_markup=buttons)
 
 
 async def send_card(chat_id: int, view: View) -> None:
-    """Send a new card: one message carrying the chart, its caption and the buttons.
-
-    A card with nothing to draw (no readings, a quiet sensor, an empty window)
-    goes out as text, still with the buttons, so the chat is never left
-    without a menu.
-    """
+    """Send a new card: one message carrying the chart, its caption and the buttons."""
     theme = subs.theme(chat_id)
-    report = render(view, theme)
-    buttons = card_buttons(chat_id, view, theme)
-
-    if report is None or report.is_empty:
-        await bot.send_message(
-            chat_id, report.text if report else NO_READINGS,
-            reply_markup=buttons, disable_web_page_preview=True,
-        )
-        return
-
-    await bot.send_photo(
-        chat_id, photo=_photo(report), caption=report.text or None,
-        reply_markup=buttons,
-    )
+    report = await render(view, theme)
+    await _send(chat_id, report, card_buttons(
+        chat_id, view, theme=theme, subscribed=subs.is_subscribed(chat_id)))
 
 
-@dp.message_handler(commands=["start", "status"])
+@dp.message_handler(commands=["start"])
 async def start_cmd(message: types.Message):
-    if message.get_command() == "/start":
-        # Also clears the reply keyboard older versions left in the chat.
-        await message.answer("Welcome! Everything is on the buttons under the card.",
-                             reply_markup=types.ReplyKeyboardRemove())
+    # Also clears the reply keyboard older versions left in the chat.
+    await message.answer("Welcome! Everything is on the buttons under the card.",
+                         reply_markup=types.ReplyKeyboardRemove())
+    await send_card(message.chat.id, STATUS)
+
+
+@dp.message_handler(commands=["status"])
+async def status_cmd(message: types.Message):
     await send_card(message.chat.id, STATUS)
 
 
@@ -95,119 +110,167 @@ async def info_cmd(message: types.Message):
 
 # ---- the reply keyboard older versions left behind ----
 # Chats that never send /start again still have it, so its buttons keep
-# working, and the first tap removes it.
+# working, and the first tap removes it. Delete once no chat can have it.
 
-LEGACY_VIEWS = {
+LEGACY_LABELS = {
     "📟 Status": STATUS,
     "📅 Today": Window.TODAY,
     "🕒 Last 12h": Window.LAST_12H,
     "📈 Last 7d": Window.LAST_7D,
     "🗓 Patterns": Window.PATTERNS,
     "Patterns": Window.PATTERNS,
+    "🔔 Subscribe": True,
+    "🔔 Unsubscribe": False,
+    "ℹ️ Info": None,
+    "Info": None,
 }
 
 
-@dp.message_handler(lambda m: m.text in LEGACY_VIEWS)
-async def legacy_view_handler(message: types.Message):
-    await message.answer(MENU_MOVED, reply_markup=types.ReplyKeyboardRemove())
-    await send_card(message.chat.id, LEGACY_VIEWS[message.text])
+@dp.message_handler(lambda m: m.text in LEGACY_LABELS)
+async def legacy_keyboard_handler(message: types.Message):
+    chat_id = message.chat.id
+    action = LEGACY_LABELS[message.text]
+    remove = types.ReplyKeyboardRemove()
+
+    if action is None:
+        await message.answer(info_text(settings.thresholds), reply_markup=remove,
+                             disable_web_page_preview=True)
+    elif isinstance(action, bool):
+        # Set what the label says: it may be older than the current state.
+        (subs.subscribe if action else subs.unsubscribe)(chat_id)
+        text = "🔔 Subscribed to alerts." if action else "🔕 Unsubscribed from alerts."
+        await message.answer(f"{text}\n{MENU_MOVED}", reply_markup=remove)
+    else:
+        await message.answer(MENU_MOVED, reply_markup=remove)
+        await send_card(chat_id, action)
 
 
-@dp.message_handler(lambda m: m.text in ["🔔 Subscribe", "🔔 Unsubscribe"])
-async def legacy_subscribe_handler(message: types.Message):
-    subscribed = subs.toggle(message.chat.id)
-    text = "🔔 Subscribed to alerts." if subscribed else "🔕 Unsubscribed from alerts."
-    await message.answer(f"{text}\n{MENU_MOVED}", reply_markup=types.ReplyKeyboardRemove())
+# ---- inline keyboard ----
+
+async def _redraw_buttons(call: types.CallbackQuery, on: Optional[View], *,
+                          theme: str, subscribed: bool) -> None:
+    # An old label can already match the new state, and Telegram rejects an
+    # edit that changes nothing.
+    with suppress(MessageNotModified):
+        await bot.edit_message_reply_markup(
+            chat_id=call.message.chat.id, message_id=call.message.message_id,
+            reply_markup=card_buttons(call.message.chat.id, on,
+                                      theme=theme, subscribed=subscribed),
+        )
 
 
-@dp.message_handler(lambda m: m.text in ["ℹ️ Info", "Info"])
-async def legacy_info_handler(message: types.Message):
-    await message.answer(info_text(settings.thresholds),
-                         reply_markup=types.ReplyKeyboardRemove(),
-                         disable_web_page_preview=True)
+async def _show(call: types.CallbackQuery, view: View, theme: str,
+                toast: str = "") -> Optional[Report]:
+    """Edit the tapped card into `view`, answering with `toast`.
 
-
-# ---- inline keyboard: re-render the same card in place ----
-
-async def _swap_card(call: types.CallbackQuery, view: View, theme: str,
-                     toast: str = "") -> None:
-    """Edit the tapped card into `view`, answering the callback exactly once."""
+    When there is nothing to draw, returns that empty report with the callback
+    still unanswered: the caller decides what to say.
+    """
     chat_id = call.message.chat.id
-    report = render(view, theme)
-    if report is None or report.is_empty:
-        # Nothing to draw. The card stays as it is and a pop-up says why.
-        await call.answer(report.notice if report else NO_READINGS, show_alert=True)
-        return
+    report = await render(view, theme)
+    if report.is_empty:
+        return report
     await call.answer(toast)
 
-    buttons = card_buttons(chat_id, view, theme)
+    buttons = card_buttons(chat_id, view, theme=theme,
+                           subscribed=subs.is_subscribed(chat_id))
     if not call.message.photo:
         # A text card cannot be edited into a photo, so the chart is sent fresh.
-        await bot.send_photo(chat_id, photo=_photo(report),
-                             caption=report.text or None, reply_markup=buttons)
-        return
-
+        await _send(chat_id, report, buttons)
+        return None
     await bot.edit_message_media(
-        chat_id=chat_id,
-        message_id=call.message.message_id,
-        media=types.InputMediaPhoto(
-            _photo(report), caption=report.text or None, parse_mode="HTML"
-        ),
+        chat_id=chat_id, message_id=call.message.message_id,
+        media=types.InputMediaPhoto(_photo(report), caption=report.text or None,
+                                    parse_mode="HTML"),
         reply_markup=buttons,
     )
+    return None
 
 
-def _is(prefix: str):
-    return lambda c: bool(c.data) and c.data.startswith(f"{prefix}:")
+async def _on_view(call: types.CallbackQuery, cb: callbacks.Callback) -> None:
+    empty = await _show(call, cb.view, subs.theme(call.message.chat.id))
+    if empty:
+        # Nothing to draw. The card stays as it is and a pop-up says why.
+        await call.answer(empty.notice, show_alert=True)
 
 
-@dp.callback_query_handler(_is(callbacks.WINDOW))
-async def window_callback(call: types.CallbackQuery):
-    _, view = callbacks.decode(call.data)
-    await _swap_card(call, view, subs.theme(call.message.chat.id))
+async def _on_new_card(call: types.CallbackQuery, cb: callbacks.Callback) -> None:
+    await call.answer()
+    await send_card(call.message.chat.id, cb.view)
 
 
-@dp.callback_query_handler(_is(callbacks.THEME))
-async def theme_callback(call: types.CallbackQuery):
-    _, view = callbacks.decode(call.data)
-    theme = subs.toggle_theme(call.message.chat.id)
-    await _swap_card(call, view, theme, toast=f"{theme.capitalize()} charts")
-
-
-@dp.callback_query_handler(_is(callbacks.SUBSCRIBE))
-async def subscribe_callback(call: types.CallbackQuery):
-    """Only the buttons change: the card itself does not depend on alerts."""
-    _, view = callbacks.decode(call.data)
+async def _on_theme(call: types.CallbackQuery, cb: callbacks.Callback) -> None:
     chat_id = call.message.chat.id
-    subscribed = subs.toggle(chat_id)
+    theme = subs.set_theme(chat_id, cb.arg or other_theme(subs.theme(chat_id)))
+    toast = f"{theme.capitalize()} charts"
+    # An alert is never re-rendered, and a text card has nothing themed to
+    # redraw: either way only the buttons change.
+    if cb.view is not None and not await _show(call, cb.view, theme, toast):
+        return
+    await call.answer(toast)
+    await _redraw_buttons(call, cb.view, theme=theme,
+                          subscribed=subs.is_subscribed(chat_id))
+
+
+async def _on_subscribe(call: types.CallbackQuery, cb: callbacks.Callback) -> None:
+    """Only the buttons change: the card itself does not depend on alerts."""
+    chat_id = call.message.chat.id
+    subscribed = (callbacks.SUBSCRIBE_ARGS[cb.arg] if cb.arg
+                  else not subs.is_subscribed(chat_id))
+    (subs.subscribe if subscribed else subs.unsubscribe)(chat_id)
     await call.answer("🔔 Subscribed to alerts" if subscribed
                       else "🔕 Unsubscribed from alerts")
-    await bot.edit_message_reply_markup(
-        chat_id=chat_id, message_id=call.message.message_id,
-        reply_markup=card_buttons(chat_id, view, subs.theme(chat_id)),
-    )
+    await _redraw_buttons(call, cb.view, theme=subs.theme(chat_id),
+                          subscribed=subscribed)
 
 
-@dp.callback_query_handler(_is(callbacks.INFO))
-async def info_callback(call: types.CallbackQuery):
+async def _on_info(call: types.CallbackQuery, cb: callbacks.Callback) -> None:
     """Info is text, not a chart, so it arrives as its own message."""
     await call.answer()
     await call.message.answer(info_text(settings.thresholds),
                               disable_web_page_preview=True)
 
 
+BUTTON_HANDLERS = {
+    callbacks.WINDOW: _on_view,
+    callbacks.NEW_CARD: _on_new_card,
+    callbacks.THEME: _on_theme,
+    callbacks.SUBSCRIBE: _on_subscribe,
+    callbacks.INFO: _on_info,
+}
+
+
+@dp.callback_query_handler()
+async def button_handler(call: types.CallbackQuery):
+    """Every inline tap. Each path answers the callback exactly once, so the
+    user's spinner always stops, even for a button this version cannot read."""
+    try:
+        cb = callbacks.decode(call.data)
+    except callbacks.CallbackError:
+        log.info("Out-of-date button: %r", call.data)
+        await call.answer(STALE_BUTTON, show_alert=True)
+        return
+    try:
+        await BUTTON_HANDLERS[cb.action](call, cb)
+    except Exception:
+        log.exception("Button %r failed", call.data)
+        # Fails harmlessly if the handler had already answered.
+        with suppress(Exception):
+            await call.answer(FAILED, show_alert=True)
+
+
 # =======================
 # AMQP consumer integration
 # =======================
 
-def alert_buttons(theme: str):
-    """An alert is a status card, so it carries the status card's buttons.
+def alert_buttons(chat_id: int, theme: str):
+    """The card's buttons, in their alert form: no view is marked, and a view
+    tap opens a new card, so the alert stays what it was when it arrived.
 
-    Every recipient is a subscriber, which is what lets the markup be built
-    per theme rather than asked of the cache once per chat.
+    Every recipient is a subscriber, so the state is known without asking the
+    cache once per chat.
     """
-    return card_markup(STATUS, theme=theme, subscribed=True,
-                       dashboard_url=settings.dashboard_url)
+    return card_buttons(chat_id, None, theme=theme, subscribed=True)
 
 
 async def _on_alert(alert: Alert) -> None:
@@ -254,7 +317,7 @@ async def _on_alert(alert: Alert) -> None:
                 chat_id=chat_id,
                 photo=uploaded.get(theme) or _photo(card),
                 caption=card.text or None,
-                reply_markup=alert_buttons(theme),
+                reply_markup=alert_buttons(chat_id, theme),
             )
             uploaded.setdefault(theme, sent.photo[-1].file_id)
             log.debug("Delivered alert to chat_id=%s", chat_id)
@@ -270,7 +333,7 @@ async def _deliver_alert_as_text(chat_id: int, alert: Alert, theme: str) -> None
         await bot.send_message(
             chat_id=chat_id,
             text=reports.alert_text(alert.pm25, alert.pm10, alert.observed_at),
-            reply_markup=alert_buttons(theme),
+            reply_markup=alert_buttons(chat_id, theme),
             disable_web_page_preview=True,
         )
         log.info("Delivered alert to chat_id=%s as text", chat_id)

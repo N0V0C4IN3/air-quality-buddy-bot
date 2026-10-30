@@ -21,6 +21,8 @@ from html_helpers import (
     format_caption, format_stale_card, relative_time, stale_notice,
 )
 
+NO_READINGS = "No readings yet."
+
 # How many recent readings the /status sparkline draws.
 SPARK_POINTS = 12
 # A reading older than this many intervals means the reader has gone quiet.
@@ -131,15 +133,13 @@ STATUS = Status.CARD
 
 # What one chart card can show; its buttons swap between these in place.
 View = Union[Status, Window]
-VIEWS: tuple = (STATUS, *Window)
+VIEWS: tuple[View, ...] = (STATUS, *Window)
+_BY_SLUG = {v.slug: v for v in VIEWS}
 
 
 def view_from_slug(slug: str) -> View:
     """Inverse of `.slug` over every view; KeyError on anything else."""
-    for view in VIEWS:
-        if view.slug == slug:
-            return view
-    raise KeyError(slug)
+    return _BY_SLUG[slug]
 
 
 @dataclass(frozen=True)
@@ -149,6 +149,11 @@ class Report:
     # Plain text for a pop-up when there is no chart to swap in: a callback
     # answer renders no HTML and holds 200 characters.
     notice: str = ""
+
+    @classmethod
+    def empty(cls, text: str, notice: str = "") -> "Report":
+        """Nothing to draw. `notice` defaults to `text`, which suits plain text."""
+        return cls(text=text, notice=notice or text)
 
     @property
     def is_empty(self) -> bool:
@@ -209,20 +214,22 @@ class ReadingReports:
         )
 
     def status_report(self, *, now: Optional[datetime] = None,
-                      theme: str = "light") -> Optional[Report]:
+                      theme: str = "light") -> Report:
         """The latest reading as a card PNG.
 
         A quiet sensor stays text: a dead reader must not have to wait on a
-        render, and there is nothing to draw.
+        render, and there is nothing to draw. So does an empty database.
         """
         now = now or datetime.now(timezone.utc)
         view = self.status(now=now)
         if view is None:
-            return None
+            return Report.empty(NO_READINGS)
         if view.is_stale(now):
-            return Report(
-                text=format_stale_card(view.observed_at, view.expected_every, now),
-                notice=stale_notice(view.observed_at, view.expected_every, now),
+            # Shown in the configured timezone, like every other time a user sees.
+            seen = view.observed_at.astimezone(self._tz)
+            return Report.empty(
+                format_stale_card(seen, view.expected_every, now),
+                notice=stale_notice(seen, view.expected_every, now),
             )
 
         chart = status_card(
@@ -289,6 +296,12 @@ class ReadingReports:
             pm25, pm10, ts_utc, level=self._thresholds.level(pm25, pm10), tz=self._tz
         )
 
+    def for_view(self, view: View, *, theme: str = "light") -> Report:
+        """Whatever a card showing `view` should carry, as of now."""
+        if view is STATUS:
+            return self.status_report(theme=theme)
+        return self.for_window(view, theme=theme)
+
     # ---------- windows ----------
 
     def for_window(self, window: Window, *, now: Optional[datetime] = None,
@@ -297,8 +310,7 @@ class ReadingReports:
         df = self._frame(start, end, floor_seconds=window.bucket_floor_seconds)
 
         if df.empty:
-            empty = f"No data for {window.title.lower()}."
-            return Report(text=empty, notice=empty)
+            return Report.empty(f"No data for {window.title.lower()}.")
 
         # The caption counts readings, not plotted points - "672 samples" for a
         # week of 30-second data would be a lie about how much was measured.

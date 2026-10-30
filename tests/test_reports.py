@@ -4,7 +4,9 @@ import pytest
 
 from common.air_quality import Level
 from common.db import ReadingRepository
-from reports import STATUS, VIEWS, ReadingReports, Report, Window, view_from_slug
+from reports import (
+    NO_READINGS, STATUS, VIEWS, ReadingReports, Report, Window, view_from_slug,
+)
 
 KYIV = timezone(timedelta(hours=3))  # fixed offset: no tz database needed
 PNG_MAGIC = bytes([0x89]) + b"PNG"
@@ -140,9 +142,11 @@ def test_a_reading_just_before_local_midnight_belongs_to_yesterday(reports, db):
 
 # ---------- status block ----------
 
-def test_status_returns_none_without_readings(reports):
+def test_status_without_readings_is_an_empty_card(reports):
     assert reports.status() is None
-    assert reports.status_report() is None
+    report = reports.status_report()
+    assert report.is_empty
+    assert report.text == report.notice == NO_READINGS
 
 
 def test_status_uses_the_newest_reading(reports, db):
@@ -200,6 +204,21 @@ def test_a_quiet_sensor_has_a_pop_up_notice(reports, db):
     assert "Sensor quiet" in notice and "2 h" in notice
     assert "<" not in notice
     assert len(notice) <= 200
+
+
+def test_a_quiet_sensor_is_last_seen_in_local_time(reports, db):
+    """08:00 UTC is 11:00 in Kyiv: the user must see 11:00, on the card and in the pop-up."""
+    add_reading(db, datetime(2026, 8, 27, 8, 0, tzinfo=timezone.utc), pm25=5.0)
+
+    report = reports.status_report(now=datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc))
+
+    assert "11:00" in report.text and "11:00" in report.notice
+    assert "08:00" not in report.text + report.notice
+
+
+def test_for_view_covers_status_and_windows(reports):
+    assert reports.for_view(STATUS).text == NO_READINGS
+    assert reports.for_view(Window.TODAY).text == "No data for today."
 
 
 def test_an_empty_window_has_a_pop_up_notice(reports):
