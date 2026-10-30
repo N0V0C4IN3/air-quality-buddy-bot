@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from io import BytesIO
-from typing import Optional
+from typing import Optional, Union
 
 import pandas as pd
 
@@ -17,7 +17,9 @@ from common.air_quality import Level, Thresholds
 from common.db import Database, ReadingRepository
 
 from charts import hour_heatmap, palette_for, status_card, window_chart
-from html_helpers import format_caption, format_stale_card, relative_time
+from html_helpers import (
+    format_caption, format_stale_card, relative_time, stale_notice,
+)
 
 # How many recent readings the /status sparkline draws.
 SPARK_POINTS = 12
@@ -107,10 +109,46 @@ class Window(Enum):
         return now - timedelta(days=7), now
 
 
+class Status(Enum):
+    """The latest-reading card: a view beside the windows, not a time range.
+
+    Its own enum rather than a fifth `Window` because it has no range, bucket
+    or smoothing, but it shares a window's `title`/`slug` shape so the card's
+    buttons and callback data can treat every view alike.
+    """
+    CARD = "Status"
+
+    @property
+    def title(self) -> str:
+        return self.value
+
+    @property
+    def slug(self) -> str:
+        return "status"
+
+
+STATUS = Status.CARD
+
+# What one chart card can show; its buttons swap between these in place.
+View = Union[Status, Window]
+VIEWS: tuple = (STATUS, *Window)
+
+
+def view_from_slug(slug: str) -> View:
+    """Inverse of `.slug` over every view; KeyError on anything else."""
+    for view in VIEWS:
+        if view.slug == slug:
+            return view
+    raise KeyError(slug)
+
+
 @dataclass(frozen=True)
 class Report:
     text: str
     chart: Optional[BytesIO] = None
+    # Plain text for a pop-up when there is no chart to swap in: a callback
+    # answer renders no HTML and holds 200 characters.
+    notice: str = ""
 
     @property
     def is_empty(self) -> bool:
@@ -182,8 +220,10 @@ class ReadingReports:
         if view is None:
             return None
         if view.is_stale(now):
-            return Report(text=format_stale_card(view.observed_at,
-                                                 view.expected_every, now))
+            return Report(
+                text=format_stale_card(view.observed_at, view.expected_every, now),
+                notice=stale_notice(view.observed_at, view.expected_every, now),
+            )
 
         chart = status_card(
             pm25=view.pm25,
@@ -257,7 +297,8 @@ class ReadingReports:
         df = self._frame(start, end, floor_seconds=window.bucket_floor_seconds)
 
         if df.empty:
-            return Report(text=f"No data for {window.title.lower()}.")
+            empty = f"No data for {window.title.lower()}."
+            return Report(text=empty, notice=empty)
 
         # The caption counts readings, not plotted points - "672 samples" for a
         # week of 30-second data would be a lie about how much was measured.

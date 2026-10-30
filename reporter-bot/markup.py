@@ -1,8 +1,9 @@
-"""Keyboards.
+"""The inline keyboard attached to every card.
 
-Two kinds: the persistent reply keyboard at the bottom of the chat, and the
-inline keyboard attached to a chart card so switching windows edits that card in
-place instead of appending another pair of messages.
+It is the bot's whole menu: switching views edits the card in place instead of
+appending another message, and the settings live beside the views. There is no
+reply keyboard; bot.py clears the one older versions left at the bottom of
+existing chats.
 
 What the buttons say and how the rows divide lives in `keyboard_layout`, which
 carries no aiogram import so it can be tested.
@@ -10,50 +11,37 @@ carries no aiogram import so it can be tested.
 from __future__ import annotations
 
 from aiogram.types import (
-    InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup,
-    WebAppInfo,
+    InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo,
 )
 
-from callbacks import theme_action, window_action
-from keyboard_layout import theme_label, window_rows
-from reports import Window
+from callbacks import info_action, subscribe_action, theme_action, window_action
+from keyboard_layout import (
+    DASHBOARD_LABEL, INFO_LABEL, subscribe_label, theme_label, view_rows,
+)
+from reports import View
 
 
-def main_menu_markup(subscribed: bool) -> ReplyKeyboardMarkup:
-    sub_text = "🔔 Unsubscribe" if subscribed else "🔔 Subscribe"
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(
-        KeyboardButton("📟 Status"),
-    )
-    kb.row(
-        KeyboardButton("📅 Today"),
-        KeyboardButton("🕒 Last 12h"),
-        KeyboardButton("📈 Last 7d"),
-    )
-    kb.add(KeyboardButton("🗓 Patterns"))
-    kb.add(KeyboardButton(sub_text))
-    kb.add(KeyboardButton("ℹ️ Info"))
-    return kb
+def card_markup(active: View, *, theme: str = "light", subscribed: bool = False,
+                dashboard_url: str = "") -> InlineKeyboardMarkup:
+    """Buttons under a card. The active view is marked, not hidden.
 
-
-def window_markup(active: Window, *, theme: str = "light",
-                  dashboard_url: str = "") -> InlineKeyboardMarkup:
-    """Buttons under a chart card. The active window is marked, not hidden.
-
-    The dashboard button, when there is a URL to point at, gets its own row:
-    it is the escape hatch from a PNG to a view you can hover and zoom, and
-    the window row is already width-budgeted to the pixel.
+    The dashboard button shares the last row with Info when there is a URL to
+    point at; without one Info has the row to itself.
     """
-    kb = InlineKeyboardMarkup(row_width=3)
-    for row in window_rows(active):
+    kb = InlineKeyboardMarkup()
+    for row in view_rows(active):
         kb.row(*[
-            InlineKeyboardButton(label, callback_data=window_action(window))
-            for window, label in row
+            InlineKeyboardButton(label, callback_data=window_action(view))
+            for view, label in row
         ])
-    kb.add(
-        InlineKeyboardButton(theme_label(theme), callback_data=theme_action(active))
+    kb.row(
+        InlineKeyboardButton(theme_label(theme), callback_data=theme_action(active)),
+        InlineKeyboardButton(subscribe_label(subscribed),
+                             callback_data=subscribe_action(active)),
     )
+    last = [InlineKeyboardButton(INFO_LABEL, callback_data=info_action(active))]
     if dashboard_url:
-        kb.add(InlineKeyboardButton("📊 Open dashboard",
-                                    web_app=WebAppInfo(url=dashboard_url)))
+        last.append(InlineKeyboardButton(DASHBOARD_LABEL,
+                                         web_app=WebAppInfo(url=dashboard_url)))
+    kb.row(*last)
     return kb

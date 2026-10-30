@@ -220,3 +220,6 @@ web-api/static/vendor/*
 
 # /autoresearch session directory; the run itself lives on its autoresearch/* branch.
 .auto/
+
+# Design prototypes published as artifacts.
+artifacts/

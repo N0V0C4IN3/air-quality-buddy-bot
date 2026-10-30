@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Optional
 
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import MenuButtonWebApp, WebAppInfo
@@ -11,8 +12,8 @@ from config import settings
 from consumer import AsyncConsumer
 from html_helpers import info_text
 import callbacks
-from markup import main_menu_markup, window_markup
-from reports import ReadingReports, Report, Window
+from markup import card_markup
+from reports import STATUS, ReadingReports, Report, View, Window
 from subscriber_cache import RedisSubscriberCache
 from subscriptions import Subscriptions
 
@@ -33,14 +34,13 @@ reports = ReadingReports(
     reading_interval_seconds=settings.reading_interval_seconds,
 )
 
+NO_READINGS = "No readings yet."
+MENU_MOVED = "The buttons now live under each card."
 
-def menu(chat_id: int):
-    return main_menu_markup(subs.is_subscribed(chat_id))
 
-
-def chart_buttons(window: Window, theme: str):
-    return window_markup(window, theme=theme,
-                         dashboard_url=settings.dashboard_url)
+def card_buttons(chat_id: int, view: View, theme: str):
+    return card_markup(view, theme=theme, subscribed=subs.is_subscribed(chat_id),
+                       dashboard_url=settings.dashboard_url)
 
 
 def _photo(report: Report) -> types.InputFile:
@@ -48,125 +48,167 @@ def _photo(report: Report) -> types.InputFile:
     return types.InputFile(report.chart, filename=report.chart.name)
 
 
-async def send_window(message: types.Message, window: Window) -> None:
-    """Send a chart card: one message carrying the chart, its stats and the buttons."""
-    theme = subs.theme(message.chat.id)
-    report = reports.for_window(window, theme=theme)
-
-    if report.is_empty:
-        await message.answer(report.text, reply_markup=menu(message.chat.id))
-        return
-
-    await message.answer_photo(
-        photo=_photo(report),
-        caption=report.text,
-        reply_markup=chart_buttons(window, theme),
-    )
+def render(view: View, theme: str) -> Optional[Report]:
+    """The card for one view; None only for Status before the first reading."""
+    if view is STATUS:
+        return reports.status_report(theme=theme)
+    return reports.for_window(view, theme=theme)
 
 
-# start shows menu
-@dp.message_handler(commands=["start"])
-async def start_cmd(message: types.Message):
-    await message.answer("Welcome! Use the buttons below:", reply_markup=menu(message.chat.id))
+async def send_card(chat_id: int, view: View) -> None:
+    """Send a new card: one message carrying the chart, its caption and the buttons.
 
+    A card with nothing to draw (no readings, a quiet sensor, an empty window)
+    goes out as text, still with the buttons, so the chat is never left
+    without a menu.
+    """
+    theme = subs.theme(chat_id)
+    report = render(view, theme)
+    buttons = card_buttons(chat_id, view, theme)
 
-# 📟 Status
-@dp.message_handler(lambda m: m.text == "📟 Status")
-async def status_handler(message: types.Message):
-    report = reports.status_report(theme=subs.theme(message.chat.id))
-    if report is None:
-        await message.answer("No readings yet.", reply_markup=menu(message.chat.id))
-        return
-    if report.is_empty:                      # sensor quiet — nothing to draw
-        await message.answer(
-            report.text, reply_markup=menu(message.chat.id),
-            disable_web_page_preview=True,
+    if report is None or report.is_empty:
+        await bot.send_message(
+            chat_id, report.text if report else NO_READINGS,
+            reply_markup=buttons, disable_web_page_preview=True,
         )
         return
-    await message.answer_photo(
-        photo=_photo(report),
-        caption=report.text or None,
-        reply_markup=menu(message.chat.id),
+
+    await bot.send_photo(
+        chat_id, photo=_photo(report), caption=report.text or None,
+        reply_markup=buttons,
     )
 
 
-# 📅 Today
-@dp.message_handler(lambda m: m.text == "📅 Today")
-async def today_handler(message: types.Message):
-    await send_window(message, Window.TODAY)
+@dp.message_handler(commands=["start", "status"])
+async def start_cmd(message: types.Message):
+    if message.get_command() == "/start":
+        # Also clears the reply keyboard older versions left in the chat.
+        await message.answer("Welcome! Everything is on the buttons under the card.",
+                             reply_markup=types.ReplyKeyboardRemove())
+    await send_card(message.chat.id, STATUS)
 
 
-# 🕒 Last 12h
-@dp.message_handler(lambda m: m.text == "🕒 Last 12h")
-async def last12_handler(message: types.Message):
-    await send_window(message, Window.LAST_12H)
+@dp.message_handler(commands=["info"])
+async def info_cmd(message: types.Message):
+    await message.answer(info_text(settings.thresholds), disable_web_page_preview=True)
 
 
-# 📈 Last 7d
-@dp.message_handler(lambda m: m.text == "📈 Last 7d")
-async def last7_handler(message: types.Message):
-    await send_window(message, Window.LAST_7D)
+# ---- the reply keyboard older versions left behind ----
+# Chats that never send /start again still have it, so its buttons keep
+# working, and the first tap removes it.
+
+LEGACY_VIEWS = {
+    "📟 Status": STATUS,
+    "📅 Today": Window.TODAY,
+    "🕒 Last 12h": Window.LAST_12H,
+    "📈 Last 7d": Window.LAST_7D,
+    "🗓 Patterns": Window.PATTERNS,
+    "Patterns": Window.PATTERNS,
+}
 
 
-# 🗓 Patterns (hour-of-day heatmap)
-@dp.message_handler(lambda m: m.text in ["🗓 Patterns", "Patterns"])
-async def patterns_handler(message: types.Message):
-    await send_window(message, Window.PATTERNS)
+@dp.message_handler(lambda m: m.text in LEGACY_VIEWS)
+async def legacy_view_handler(message: types.Message):
+    await message.answer(MENU_MOVED, reply_markup=types.ReplyKeyboardRemove())
+    await send_card(message.chat.id, LEGACY_VIEWS[message.text])
+
+
+@dp.message_handler(lambda m: m.text in ["🔔 Subscribe", "🔔 Unsubscribe"])
+async def legacy_subscribe_handler(message: types.Message):
+    subscribed = subs.toggle(message.chat.id)
+    text = "🔔 Subscribed to alerts." if subscribed else "🔕 Unsubscribed from alerts."
+    await message.answer(f"{text}\n{MENU_MOVED}", reply_markup=types.ReplyKeyboardRemove())
+
+
+@dp.message_handler(lambda m: m.text in ["ℹ️ Info", "Info"])
+async def legacy_info_handler(message: types.Message):
+    await message.answer(info_text(settings.thresholds),
+                         reply_markup=types.ReplyKeyboardRemove(),
+                         disable_web_page_preview=True)
 
 
 # ---- inline keyboard: re-render the same card in place ----
 
-async def _swap_card(call: types.CallbackQuery, window: Window, theme: str) -> None:
-    report = reports.for_window(window, theme=theme)
-    if report.is_empty:
-        await call.answer(report.text, show_alert=True)
+async def _swap_card(call: types.CallbackQuery, view: View, theme: str,
+                     toast: str = "") -> None:
+    """Edit the tapped card into `view`, answering the callback exactly once."""
+    chat_id = call.message.chat.id
+    report = render(view, theme)
+    if report is None or report.is_empty:
+        # Nothing to draw. The card stays as it is and a pop-up says why.
+        await call.answer(report.notice if report else NO_READINGS, show_alert=True)
+        return
+    await call.answer(toast)
+
+    buttons = card_buttons(chat_id, view, theme)
+    if not call.message.photo:
+        # A text card cannot be edited into a photo, so the chart is sent fresh.
+        await bot.send_photo(chat_id, photo=_photo(report),
+                             caption=report.text or None, reply_markup=buttons)
         return
 
     await bot.edit_message_media(
-        chat_id=call.message.chat.id,
+        chat_id=chat_id,
         message_id=call.message.message_id,
         media=types.InputMediaPhoto(
-            _photo(report), caption=report.text, parse_mode="HTML"
+            _photo(report), caption=report.text or None, parse_mode="HTML"
         ),
-        reply_markup=chart_buttons(window, theme),
+        reply_markup=buttons,
     )
 
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith(f"{callbacks.WINDOW}:"))
+def _is(prefix: str):
+    return lambda c: bool(c.data) and c.data.startswith(f"{prefix}:")
+
+
+@dp.callback_query_handler(_is(callbacks.WINDOW))
 async def window_callback(call: types.CallbackQuery):
-    _, window = callbacks.decode(call.data)
-    await call.answer()
-    await _swap_card(call, window, subs.theme(call.message.chat.id))
+    _, view = callbacks.decode(call.data)
+    await _swap_card(call, view, subs.theme(call.message.chat.id))
 
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith(f"{callbacks.THEME}:"))
+@dp.callback_query_handler(_is(callbacks.THEME))
 async def theme_callback(call: types.CallbackQuery):
-    _, window = callbacks.decode(call.data)
+    _, view = callbacks.decode(call.data)
     theme = subs.toggle_theme(call.message.chat.id)
-    await call.answer(f"{theme.capitalize()} charts")
-    await _swap_card(call, window, theme)
+    await _swap_card(call, view, theme, toast=f"{theme.capitalize()} charts")
 
 
-# 🔔 Subscribe / Unsubscribe
-@dp.message_handler(lambda m: m.text in ["🔔 Subscribe", "🔔 Unsubscribe"])
-async def toggle_sub_handler(message: types.Message):
-    subscribed = subs.toggle(message.chat.id)
-    text = "🔔 Subscribed to alerts." if subscribed else "🔕 Unsubscribed from alerts."
-    await message.answer(text, reply_markup=main_menu_markup(subscribed))
-
-
-@dp.message_handler(lambda m: m.text in ["ℹ️ Info", "Info"])
-async def info_handler(message: types.Message):
-    await message.answer(
-        info_text(settings.thresholds),
-        reply_markup=menu(message.chat.id),
-        disable_web_page_preview=True,
+@dp.callback_query_handler(_is(callbacks.SUBSCRIBE))
+async def subscribe_callback(call: types.CallbackQuery):
+    """Only the buttons change: the card itself does not depend on alerts."""
+    _, view = callbacks.decode(call.data)
+    chat_id = call.message.chat.id
+    subscribed = subs.toggle(chat_id)
+    await call.answer("🔔 Subscribed to alerts" if subscribed
+                      else "🔕 Unsubscribed from alerts")
+    await bot.edit_message_reply_markup(
+        chat_id=chat_id, message_id=call.message.message_id,
+        reply_markup=card_buttons(chat_id, view, subs.theme(chat_id)),
     )
+
+
+@dp.callback_query_handler(_is(callbacks.INFO))
+async def info_callback(call: types.CallbackQuery):
+    """Info is text, not a chart, so it arrives as its own message."""
+    await call.answer()
+    await call.message.answer(info_text(settings.thresholds),
+                              disable_web_page_preview=True)
 
 
 # =======================
 # AMQP consumer integration
 # =======================
+
+def alert_buttons(theme: str):
+    """An alert is a status card, so it carries the status card's buttons.
+
+    Every recipient is a subscriber, which is what lets the markup be built
+    per theme rather than asked of the cache once per chat.
+    """
+    return card_markup(STATUS, theme=theme, subscribed=True,
+                       dashboard_url=settings.dashboard_url)
+
 
 async def _on_alert(alert: Alert) -> None:
     """Fan one decoded alert out to every subscriber."""
@@ -205,30 +247,30 @@ async def _on_alert(alert: Alert) -> None:
         theme = theme_by_chat.get(chat_id, "light")
         card = cards.get(theme)
         if card is None:
-            await _deliver_alert_as_text(chat_id, alert)
+            await _deliver_alert_as_text(chat_id, alert, theme)
             continue
         try:
             sent = await bot.send_photo(
                 chat_id=chat_id,
                 photo=uploaded.get(theme) or _photo(card),
                 caption=card.text or None,
-                reply_markup=main_menu_markup(True),
+                reply_markup=alert_buttons(theme),
             )
             uploaded.setdefault(theme, sent.photo[-1].file_id)
             log.debug("Delivered alert to chat_id=%s", chat_id)
         except Exception as e:
             # ignore per-chat errors to avoid blocking the rest
             log.warning("Failed to deliver to chat_id=%s: %s", chat_id, e)
-            await _deliver_alert_as_text(chat_id, alert)
+            await _deliver_alert_as_text(chat_id, alert, theme)
 
 
-async def _deliver_alert_as_text(chat_id: int, alert: Alert) -> None:
+async def _deliver_alert_as_text(chat_id: int, alert: Alert, theme: str) -> None:
     """Last resort: an alert that cannot be drawn must still arrive."""
     try:
         await bot.send_message(
             chat_id=chat_id,
             text=reports.alert_text(alert.pm25, alert.pm10, alert.observed_at),
-            reply_markup=main_menu_markup(True),
+            reply_markup=alert_buttons(theme),
             disable_web_page_preview=True,
         )
         log.info("Delivered alert to chat_id=%s as text", chat_id)
@@ -266,6 +308,17 @@ async def _install_menu_button() -> None:
         log.exception("Could not set the dashboard menu button")
 
 
+async def _install_commands() -> None:
+    """With no reply keyboard, /status is how a fresh card is summoned."""
+    try:
+        await bot.set_my_commands([
+            types.BotCommand("status", "Latest reading, with all the buttons"),
+            types.BotCommand("info", "What the numbers and charts mean"),
+        ])
+    except Exception:
+        log.exception("Could not set the bot commands")
+
+
 async def on_startup(_):
     """aiogram startup hook: warm the subscriber cache, start the AMQP consumer."""
     count = subs.preload()
@@ -281,6 +334,7 @@ async def on_startup(_):
     dp["amqp_consumer"] = consumer
     dp["amqp_task"] = task
     await _install_menu_button()
+    await _install_commands()
 
     log.info("[startup] AMQP consumer task created")
 
