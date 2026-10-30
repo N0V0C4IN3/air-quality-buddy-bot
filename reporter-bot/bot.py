@@ -1,11 +1,13 @@
 import asyncio
 import functools
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, executor, types
+from aiogram.dispatcher.middlewares import BaseMiddleware
 from aiogram.types import MenuButtonWebApp, WebAppInfo
 from aiogram.utils.exceptions import MessageNotModified
 
@@ -28,8 +30,48 @@ logging.basicConfig(
 )
 log = logging.getLogger("reporter_bot")
 
-bot = Bot(token=settings.telegram_token, parse_mode="HTML")
+# Without a timeout aiohttp waits 300 s, and that includes the long poll that
+# fetches updates: a connection dropped silently somewhere on the way (the Pi
+# is on Wi-Fi) left the bot deaf for five minutes. aiogram adds the 20 s poll
+# to this for getUpdates, so a dead poll is abandoned after 35 s.
+TELEGRAM_TIMEOUT_SECONDS = 15
+# Above these an update is logged as a warning rather than at info.
+SLOW_DELIVERY_SECONDS = 5
+SLOW_HANDLING_SECONDS = 2
+
+bot = Bot(token=settings.telegram_token, parse_mode="HTML",
+          timeout=TELEGRAM_TIMEOUT_SECONDS)
 dp = Dispatcher(bot)
+
+
+class UpdateTiming(BaseMiddleware):
+    """One log line per update: how late Telegram delivered it and how long
+    the bot took, so a reported delay can be placed on one side or the other.
+
+    Delivery lag is only known for messages: a callback query carries no
+    timestamp of its own, only the date of the card it was tapped on.
+    """
+
+    async def on_pre_process_update(self, update: types.Update, data: dict):
+        data["_started"] = time.monotonic()
+
+    async def on_post_process_update(self, update: types.Update, result, data: dict):
+        handled = time.monotonic() - data.get("_started", time.monotonic())
+        if update.message:
+            kind = f"message {update.message.text or update.message.content_type!r}"
+            lag = time.time() - update.message.date.timestamp()
+        elif update.callback_query:
+            kind, lag = f"button {update.callback_query.data!r}", None
+        else:
+            kind, lag = "update", None
+        slow = handled > SLOW_HANDLING_SECONDS or (lag or 0) > SLOW_DELIVERY_SECONDS
+        delivered = f"delivered after {lag:.1f}s, " if lag is not None else ""
+        log.log(logging.WARNING if slow else logging.INFO,
+                "%s%s: %shandled in %.2fs", "SLOW " if slow else "", kind,
+                delivered, handled)
+
+
+dp.middleware.setup(UpdateTiming())
 
 # One engine for the process; handlers borrow sessions from it.
 db = Database(url=settings.database_url)
@@ -178,12 +220,15 @@ async def _show(call: types.CallbackQuery, view: View, theme: str,
         # A text card cannot be edited into a photo, so the chart is sent fresh.
         await _send(chat_id, report, buttons)
         return None
-    await bot.edit_message_media(
-        chat_id=chat_id, message_id=call.message.message_id,
-        media=types.InputMediaPhoto(_photo(report), caption=report.text or None,
-                                    parse_mode="HTML"),
-        reply_markup=buttons,
-    )
+    # Status tapped twice within one reading draws the identical card, and
+    # Telegram refuses an edit that changes nothing: the card is current.
+    with suppress(MessageNotModified):
+        await bot.edit_message_media(
+            chat_id=chat_id, message_id=call.message.message_id,
+            media=types.InputMediaPhoto(_photo(report), caption=report.text or None,
+                                        parse_mode="HTML"),
+            reply_markup=buttons,
+        )
     return None
 
 

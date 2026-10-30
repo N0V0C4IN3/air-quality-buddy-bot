@@ -53,6 +53,19 @@ def test_the_row_plan():
     ]
 
 
+def test_an_alert_carries_the_whole_menu():
+    """From an alert you can reach the current status, any window, the
+    settings and the dashboard - nothing is marked, because an alert is not a view."""
+    rows = card_rows(None, theme="light", subscribed=True, dashboard_url=DASH)
+    assert [[b.label for b in row] for row in rows] == [
+        ["📟 Status", "🗓 Patterns"],
+        ["Today", "12h", "7d"],
+        ["🌙 Dark mode", "🔕 Unsubscribe"],
+        ["ℹ️ Info", "📊 Dashboard"],
+    ]
+    assert decode(rows[0][0].callback) == decode(f"{NEW_CARD}:status")
+
+
 def test_no_row_holds_more_than_three_buttons():
     """A four-way split is what truncated the long labels."""
     for _, rows in plans():
