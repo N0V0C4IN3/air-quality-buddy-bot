@@ -5,12 +5,12 @@ JSON-ready dicts; nothing above this line knows about sessions, UTC round-trips
 or bucket arithmetic, and nothing below it knows about HTTP.
 
 Series come back columnar - parallel arrays rather than a list of objects -
-because that is the shape uPlot draws and it is a fraction of the bytes.
+because the page walks them index by index and it is a fraction of the bytes.
 """
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from common.air_quality import Thresholds
@@ -209,6 +209,107 @@ class DashboardService:
                 "grid": _grid(grid_10),
                 "by_hour": [_mean(hours_10.get(h, [])) for h in range(24)],
             },
+        }
+
+    # ---------- the timeline ----------
+
+    def days(self, *, now: Optional[datetime] = None, days: Optional[int] = None) -> dict:
+        """One row per local calendar day, oldest first: the 90-day timeline.
+
+        Rolled up from hourly buckets rather than daily ones, because SQL
+        buckets are aligned to the epoch - a UTC day - and the timeline's days
+        are the sensor's. 90 days is ~2k hourly rows.
+        """
+        now = now or datetime.now(timezone.utc)
+        n = max(1, min(days or self._retention_days, self._retention_days))
+        local_now = now.astimezone(self._tz)
+        first = local_now.date() - timedelta(days=n - 1)
+        start = datetime(first.year, first.month, first.day, tzinfo=self._tz)
+        with self._db.session() as s:
+            hourly = ReadingRepository(s).get_buckets(
+                start=start.astimezone(timezone.utc), end=now, bucket_seconds=3600,
+            )
+
+        by_day: dict = {}
+        for b in hourly:
+            day = b.start.astimezone(self._tz).date()
+            d = by_day.setdefault(day, {"n": 0, "sum25": 0.0, "max25": 0.0, "max10": 0.0})
+            d["n"] += b.count
+            d["sum25"] += b.pm25_avg * b.count
+            d["max25"] = max(d["max25"], b.pm25_max)
+            d["max10"] = max(d["max10"], b.pm10_max)
+
+        out = []
+        for day, d in sorted(by_day.items()):
+            level = self._thresholds.level(d["max25"], d["max10"])
+            out.append({
+                "date": day.isoformat(),
+                "start": datetime(day.year, day.month, day.day, tzinfo=self._tz)
+                .astimezone(timezone.utc).isoformat(),
+                "count": d["n"],
+                "pm25_avg": round(d["sum25"] / d["n"], 1),
+                "pm25_max": round(d["max25"], 1),
+                "pm10_max": round(d["max10"], 1),
+                # The worst reading of the day decides, as it does for alerts.
+                "level": level.value,
+            })
+        return {
+            "from": start.astimezone(timezone.utc).isoformat(),
+            "to": now.isoformat(),
+            "days": out,
+        }
+
+    # ---------- episodes ----------
+
+    def episodes(self, rng: TimeRange, *, limit: int = 20) -> dict:
+        """Stretches of the range above a warn limit, newest first.
+
+        Readings above a limit join one episode while they stay within two
+        reading intervals of each other, so a single clean reading in the middle
+        of a smoky evening does not split it in two. An episode ends one
+        interval after its last bad reading - that reading stood for the
+        interval it was taken in.
+        """
+        t = self._thresholds
+        with self._db.session() as s:
+            rows = ReadingRepository(s).get_exceedances(
+                start=rng.start, end=rng.end,
+                pm25_warn=t.pm25_warn, pm10_warn=t.pm10_warn,
+            )
+
+        gap = timedelta(seconds=2 * self._interval)
+        runs: list[dict] = []
+        for ts, pm25, pm10 in rows:
+            ts = _utc(ts)
+            cur = runs[-1] if runs else None
+            if cur and ts - cur["last"] <= gap:
+                cur["last"] = ts
+                cur["pm25"] = max(cur["pm25"], pm25)
+                cur["pm10"] = max(cur["pm10"], pm10)
+                cur["readings"] += 1
+            else:
+                runs.append({"first": ts, "last": ts, "pm25": pm25, "pm10": pm10, "readings": 1})
+
+        step = timedelta(seconds=self._interval)
+        episodes = []
+        for r in reversed(runs):
+            level = t.level(r["pm25"], r["pm10"])
+            # Which pollutant broke its limit by more, relative to that limit.
+            worst = "pm25" if r["pm25"] / t.pm25_warn >= r["pm10"] / t.pm10_warn else "pm10"
+            episodes.append({
+                "from": r["first"].isoformat(),
+                "to": min(r["last"] + step, rng.end).isoformat(),
+                "level": level.value,
+                "level_label": level.label,
+                "readings": r["readings"],
+                "pollutant": worst,
+                "pm25_peak": round(r["pm25"], 1),
+                "pm10_peak": round(r["pm10"], 1),
+            })
+        return {
+            "range": _range_json(rng),
+            "count": len(episodes),
+            "episodes": episodes[:limit],
         }
 
     # ---------- internals ----------

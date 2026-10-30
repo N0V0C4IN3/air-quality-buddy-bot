@@ -14,15 +14,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY common /app/common
 COPY web-api /app
 
-# uPlot is vendored at build time rather than pulled from a CDN at page load:
-# the dashboard has to work on a LAN with no route out, and a chart library
-# fetched over someone else's network is a dependency on their uptime.
-ARG UPLOT_VERSION=1.6.31
-RUN mkdir -p /app/static/vendor && curl -fsSL -o /app/static/vendor/uPlot.iife.min.js \
-      "https://cdn.jsdelivr.net/npm/uplot@${UPLOT_VERSION}/dist/uPlot.iife.min.js" && \
-    curl -fsSL -o /app/static/vendor/uPlot.min.css \
-      "https://cdn.jsdelivr.net/npm/uplot@${UPLOT_VERSION}/dist/uPlot.min.css"
-
 ENV PYTHONPATH=/app
 USER runner
 

@@ -198,6 +198,32 @@ class ReadingRepository:
             q = q.limit(limit)
         return q.all()
 
+    def get_exceedances(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        pm25_warn: float,
+        pm10_warn: float,
+    ) -> list[tuple[datetime, float, float]]:
+        """(timestamp, pm25, pm10) for every reading in [start, end) at or above
+        either warn limit, oldest first.
+
+        Only the exceedances leave the database: a clean week is zero rows, and
+        joining them into episodes is a single pass in Python.
+        """
+        rows = (
+            self.session.query(Reading.timestamp, Reading.pm25, Reading.pm10)
+            .filter(
+                Reading.timestamp >= start,
+                Reading.timestamp < end,
+                (Reading.pm25 >= pm25_warn) | (Reading.pm10 >= pm10_warn),
+            )
+            .order_by(Reading.timestamp.asc())
+            .all()
+        )
+        return [(ts, float(a), float(b)) for ts, a, b in rows]
+
     # ---------- aggregation ----------
     # Bucketing happens in SQL because the alternative is shipping every row to
     # Python. The epoch expression is the one dialect-specific part: Postgres

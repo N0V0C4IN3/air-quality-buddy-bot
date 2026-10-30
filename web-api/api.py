@@ -104,6 +104,17 @@ def create_app(
     def patterns(rng: TimeRange = Depends(window), who: Viewer = Depends(viewer)) -> dict:
         return service.patterns(rng)
 
+    @app.get("/api/days")
+    def days(
+        n: Optional[int] = Query(default=None, alias="days", ge=1, le=366),
+        who: Viewer = Depends(viewer),
+    ) -> dict:
+        return service.days(days=n)
+
+    @app.get("/api/episodes")
+    def episodes(rng: TimeRange = Depends(window), who: Viewer = Depends(viewer)) -> dict:
+        return service.episodes(rng)
+
     @app.post("/api/theme")
     def theme(choice: ThemeChoice, who: Viewer = Depends(viewer)) -> dict:
         # Only a verified Telegram viewer has a chat row to write to; everyone

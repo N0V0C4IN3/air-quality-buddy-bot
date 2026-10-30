@@ -13,14 +13,14 @@ reaches every user-visible surface the repo has —
     JSON route exercised and the page screenshotted in headless Chrome.
 
 Everything lands under `.run-out/` at the repo root. Nothing here touches
-Postgres, RabbitMQ, Redis or the network except the one-off uPlot vendor fetch.
+Postgres, RabbitMQ, Redis or the network.
 
 Usage (from the repo root):
 
     python .claude/skills/run-air-quality-buddy-bot/driver.py all
     python .claude/skills/run-air-quality-buddy-bot/driver.py <step> [...]
 
-Steps: vendor, seed, sensor, charts, web, smoke, shot, exec, all,
+Steps: seed, sensor, charts, web, smoke, shot, exec, all,
 plus seed-compose for the docker compose Postgres.
 """
 from __future__ import annotations
@@ -50,15 +50,9 @@ for _stream in (sys.stdout, sys.stderr):
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 OUT = ROOT / ".run-out"
 DB_FILE = OUT / "dev.db"
-VENDOR = ROOT / "web-api" / "static" / "vendor"
 
 # The Dockerfile pins this; keep the two in step or the local page and the
 # shipped page are running different chart libraries.
-UPLOT_VERSION = "1.6.31"
-UPLOT_FILES = {
-    "uPlot.iife.min.js": f"https://cdn.jsdelivr.net/npm/uplot@{UPLOT_VERSION}/dist/uPlot.iife.min.js",
-    "uPlot.min.css": f"https://cdn.jsdelivr.net/npm/uplot@{UPLOT_VERSION}/dist/uPlot.min.css",
-}
 
 PORT = int(os.getenv("RUN_WEB_PORT", "8099"))
 BASE = f"http://127.0.0.1:{PORT}"
@@ -114,26 +108,6 @@ def say(step: str, msg: str) -> None:
 # --------------------------------------------------------------------------
 # steps
 # --------------------------------------------------------------------------
-
-def step_vendor(force: bool = False) -> None:
-    """Fetch uPlot into web-api/static/vendor.
-
-    The Dockerfile curls these at build time, so the checked-out tree has an
-    empty `vendor/` with a .gitkeep. Serving `web-api` straight from the repo
-    without this gives a page that loads, renders the shell, and has no charts —
-    `uPlot is not defined` in the console, nothing visible in the DOM.
-    """
-    VENDOR.mkdir(parents=True, exist_ok=True)
-    for name, url in UPLOT_FILES.items():
-        dest = VENDOR / name
-        if dest.exists() and dest.stat().st_size > 0 and not force:
-            say("vendor", f"{name} already present ({dest.stat().st_size}b)")
-            continue
-        say("vendor", f"fetching {url}")
-        with urllib.request.urlopen(url, timeout=30) as r:
-            dest.write_bytes(r.read())
-        say("vendor", f"wrote {dest.relative_to(ROOT)} ({dest.stat().st_size}b)")
-
 
 # One seed script, two destinations: exec'd in-process against SQLite, or piped
 # into a container to fill the compose Postgres. It reads DATABASE_URL and
@@ -443,7 +417,7 @@ def _post(path: str, payload: dict) -> tuple[int, bytes]:
 
 
 def step_smoke() -> None:
-    """Every dashboard route, plus the two static assets that break silently."""
+    """Every dashboard route, plus the page's own modules."""
     checks = [
         ("GET  /api/health", *_get("/api/health")),
         ("GET  /api/meta", *_get("/api/meta")),
@@ -456,8 +430,12 @@ def step_smoke() -> None:
         ("GET  /api/summary?range=7d", *_get("/api/summary?range=7d")),
         ("GET  /api/patterns?range=7d", *_get("/api/patterns?range=7d")),
         ("GET  /", *_get("/")),
-        ("GET  /vendor/uPlot.iife.min.js", *_get("/vendor/uPlot.iife.min.js")),
+        ("GET  /api/days", *_get("/api/days")),
+        ("GET  /api/episodes?range=7d", *_get("/api/episodes?range=7d")),
+        ("GET  /api/series?range=yesterday", *_get("/api/series?range=yesterday")),
         ("GET  /app.js", *_get("/app.js")),
+        ("GET  /charts.js", *_get("/charts.js")),
+        ("GET  /clock.js", *_get("/clock.js")),
     ]
     failed = []
     for label, status, body in checks:
@@ -542,7 +520,6 @@ def step_shot(name: str = "dashboard", url: str | None = None,
 
 
 def step_all(args) -> None:
-    step_vendor()
     step_seed(days=args.days)
     step_sensor()
     step_charts()
@@ -562,8 +539,6 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-
-    sub.add_parser("vendor", help="fetch uPlot into web-api/static/vendor")
 
     p = sub.add_parser("seed", help="alembic upgrade + synthetic readings")
     p.add_argument("--days", type=int, default=10)
@@ -597,9 +572,7 @@ def main() -> int:
 
     args = ap.parse_args()
 
-    if args.cmd == "vendor":
-        step_vendor()
-    elif args.cmd == "seed":
+    if args.cmd == "seed":
         step_seed(days=args.days, fresh=not args.keep)
     elif args.cmd == "sensor":
         step_sensor(seconds=args.seconds, interval=args.interval)

@@ -103,7 +103,7 @@ The Telegram bot sends PNGs, so it has no hover layer and no way to ask for
 `web-api` is a read-only FastAPI service over the same Postgres. It aggregates
 in SQL — ask for ninety days and you get bucketed means with each bucket's
 min/max spread behind them, not 26k points — and serves a small static page
-(vanilla JS + uPlot, no build step) from the same container.
+(vanilla JS drawing its own SVG, no build step and no chart library) from the same container.
 
 ```bash
 docker compose up --build db web-api -d

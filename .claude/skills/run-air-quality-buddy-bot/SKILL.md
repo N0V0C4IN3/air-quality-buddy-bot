@@ -47,7 +47,7 @@ One command does everything and leaves artefacts on disk to look at:
 python .claude/skills/run-air-quality-buddy-bot/driver.py all
 ```
 
-That vendors uPlot, migrates and seeds a SQLite DB, runs the real sensor-reader
+That migrates and seeds a SQLite DB, runs the real sensor-reader
 loop for four cycles, renders 12 PNGs, serves the dashboard, checks every route
 and screenshots the page — about 90 seconds. Output lands in `.run-out/`
 (gitignored):
@@ -68,7 +68,6 @@ raised.
 Each is also a subcommand, so you can re-run just the part you changed:
 
 ```bash
-python .claude/skills/run-air-quality-buddy-bot/driver.py vendor          # fetch uPlot into web-api/static/vendor
 python .claude/skills/run-air-quality-buddy-bot/driver.py seed --days 10  # alembic upgrade head + synthetic readings
 python .claude/skills/run-air-quality-buddy-bot/driver.py sensor          # the real sensor-reader loop, ~8s
 python .claude/skills/run-air-quality-buddy-bot/driver.py charts          # every bot PNG, both themes
@@ -176,12 +175,9 @@ work locally. Let CI cover it.
 
 ## Gotchas
 
-- **`web-api/static/vendor/` is empty in a fresh checkout** — only a `.gitkeep`.
-  The Dockerfile curls uPlot at *build* time, so serving web-api straight from
-  the repo gives a page that loads its shell, logs `uPlot is not defined`, and
-  draws no charts. `driver.py vendor` fetches the same pinned 1.6.31. If you
-  bump the version in `web-api/Dockerfile`, bump `UPLOT_VERSION` in the driver
-  too.
+- **The dashboard has no chart library.** `web-api/static/charts.js` draws
+  SVG itself, so serving web-api straight from the repo is the whole page —
+  there is nothing to vendor or fetch first.
 - **A Russian-locale Windows console is cp1251, and every reading logs `µg/m³`.**
   Echoing a service's perfectly healthy log line kills the driver with
   `UnicodeEncodeError: 'charmap' codec can't encode character 'μ'`. The
@@ -251,7 +247,7 @@ work locally. Let CI cover it.
 | --- | --- |
 | `UnicodeEncodeError: 'charmap' codec can't encode character 'μ'` | You are on a cp1251 console. Already handled in `driver.py`; if you wrote your own script, `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`. |
 | `web-api never answered /api/health` | Read `.run-out/web-api.log` — it is uvicorn's stdout. Usually `ConfigError` from a missing env var; `service_env()` in the driver is the full list. |
-| Dashboard screenshot renders the shell but no charts | uPlot missing. `driver.py vendor`. |
+| Dashboard screenshot renders the shell but no charts | A module threw. Open the page in Chrome with DevTools; every module is an ES module, so one syntax error blanks the lot. |
 | `chrome wrote no screenshot` | Another Chrome held the profile, or the binary is not at a path in `CHROME_CANDIDATES` — edit that list in `driver.py`. |
 | `sensor-reader wrote nothing` | Run `driver.py seed` first; `main.py` does not migrate, and it logs to stdout which the driver echoes. |
 | Port 8099 already in use | `RUN_WEB_PORT=8100 python .claude/skills/run-air-quality-buddy-bot/driver.py all` |

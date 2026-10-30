@@ -151,7 +151,7 @@ def test_health_needs_no_credential(client):
 
 def test_every_data_route_is_guarded(client):
     for path in ("/api/meta", "/api/latest", "/api/series", "/api/summary",
-                 "/api/patterns"):
+                 "/api/patterns", "/api/days", "/api/episodes"):
         assert client.get(path).status_code == 401, path
 
 
@@ -210,6 +210,70 @@ def test_patterns_grids_by_local_hour(client):
     by_hour = body["pm25"]["by_hour"]
     assert by_hour[15] == 40.0       # the seeded afternoon peak, in Kyiv time
     assert by_hour[3] == 10.0
+
+
+# ---------- the timeline and above-limit periods ----------
+
+def test_exceedances_leave_the_database_and_nothing_else(seeded, thresholds):
+    with seeded.session() as s:
+        rows = ReadingRepository(s).get_exceedances(
+            start=START, end=START + timedelta(days=2),
+            pm25_warn=thresholds.pm25_warn, pm10_warn=thresholds.pm10_warn,
+        )
+    assert len(rows) == 2 * 4 * 12                # 14:00-18:00 local, both days
+    assert all(pm25 >= thresholds.pm25_warn or pm10 >= thresholds.pm10_warn
+               for _, pm25, pm10 in rows)
+
+
+def test_episodes_are_the_afternoons_newest_first(client):
+    body = client.get("/api/episodes", params=window(), headers=auth()).json()
+    assert body["count"] == 2
+    newest, oldest = body["episodes"]
+    assert newest["from"] > oldest["from"]
+    start = datetime.fromisoformat(oldest["from"]).astimezone(KYIV)
+    end = datetime.fromisoformat(oldest["to"]).astimezone(KYIV)
+    assert (start.hour, start.minute, end.hour, end.minute) == (14, 0, 18, 0)
+    assert oldest["readings"] == 48
+    assert oldest["level"] == "warn" and oldest["level_label"] == "Elevated"
+    assert (oldest["pm25_peak"], oldest["pm10_peak"]) == (40.0, 60.0)
+    # 60/50 is further over its limit than 40/35.
+    assert oldest["pollutant"] == "pm10"
+
+
+def test_one_clean_reading_does_not_split_an_episode(db, thresholds):
+    with db.session() as s:
+        repo = ReadingRepository(s)
+        for i, pm25 in enumerate([40, 41, 10, 42, 43, 10, 10, 10, 44]):
+            repo.add(pm25=pm25, pm10=20, timestamp=START + timedelta(seconds=i * INTERVAL))
+    svc = DashboardService(db, KYIV, thresholds, reading_interval_seconds=INTERVAL)
+    from ranges import TimeRange
+    eps = svc.episodes(TimeRange(START, START + timedelta(hours=1), "custom"))["episodes"]
+    # 40 41 . 42 43 is one stretch; three clean readings end it; 44 is another.
+    assert [e["readings"] for e in eps] == [1, 4]
+    assert eps[1]["pm25_peak"] == 43.0
+
+
+def test_a_range_with_nothing_over_the_limit_has_no_episodes(client):
+    body = client.get("/api/episodes", params={"from": START.isoformat(),
+                      "to": (START + timedelta(hours=6)).isoformat()}, headers=auth()).json()
+    assert body == {**body, "count": 0, "episodes": []}
+
+
+def test_days_are_local_calendar_days_flagged_by_their_worst_reading(service):
+    body = service.days(now=START + timedelta(days=2))
+    days = {d["date"]: d for d in body["days"]}
+    # 00:00 UTC is 02:00 in Kyiv, so two UTC days touch three local ones.
+    assert list(days) == ["2026-03-10", "2026-03-11", "2026-03-12"]
+    assert days["2026-03-11"]["count"] == 288
+    assert days["2026-03-11"]["level"] == "warn"
+    assert days["2026-03-11"]["pm25_max"] == 40.0
+    assert days["2026-03-12"]["level"] == "ok"      # only 00:00-02:00 local
+    assert datetime.fromisoformat(days["2026-03-11"]["start"]).astimezone(KYIV).hour == 0
+
+
+def test_days_route_answers(client):
+    body = client.get("/api/days", headers=auth()).json()
+    assert set(body) == {"from", "to", "days"}
 
 
 def test_a_bad_range_is_a_400_not_a_500(client):

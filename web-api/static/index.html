@@ -4,65 +4,104 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Air Quality</title>
-  <link rel="stylesheet" href="vendor/uPlot.min.css">
   <link rel="stylesheet" href="styles.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="vendor/uPlot.iife.min.js"></script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="dot" id="live-dot" aria-hidden="true"></span>
-      <h1>Air Quality</h1>
-    </div>
-    <div class="topbar-actions">
-      <button id="customize-btn" class="ghost" aria-expanded="false">Panels</button>
-      <button id="theme-btn" class="ghost" title="Toggle light / dark">Theme</button>
-    </div>
-  </header>
+  <div class="glow g1" aria-hidden="true"></div>
+  <div class="glow g2" aria-hidden="true"></div>
 
-  <nav class="rangebar" aria-label="Time frame">
-    <div class="presets" id="presets" role="group" aria-label="Preset ranges"></div>
-    <div class="custom">
-      <label>From <input type="datetime-local" id="from"></label>
-      <label>To <input type="datetime-local" id="to"></label>
-      <button id="apply-custom">Apply</button>
-      <label class="bucket">Resolution
-        <select id="bucket">
-          <option value="">Auto</option>
-          <option value="raw">Every reading</option>
-          <option value="5m">5 minutes</option>
-          <option value="15m">15 minutes</option>
-          <option value="1h">Hourly</option>
-          <option value="6h">6 hours</option>
-          <option value="1d">Daily</option>
-        </select>
-      </label>
-    </div>
-  </nav>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="live" id="live-dot" aria-hidden="true"></span>
+        <h1>Air Quality</h1>
+      </div>
+      <div class="top-actions">
+        <span class="updated" id="updated"></span>
+        <button type="button" class="icon" id="theme-btn" aria-label="Switch to dark theme">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        </button>
+      </div>
+    </header>
 
-  <section id="customize" class="customize" hidden>
-    <p class="hint">Choose what this dashboard shows. Your layout is remembered in this browser.</p>
-    <div id="panel-toggles" class="toggles"></div>
-  </section>
+    <main class="grid">
+      <section class="card hero" aria-labelledby="now-title">
+        <h2 class="tag" id="now-title">Now</h2>
+        <div class="rings" id="rings"></div>
+        <div class="meta" id="now-meta"></div>
+      </section>
 
-  <p id="status-line" class="status-line" role="status"></p>
+      <section class="card filters-card" aria-label="Time frame">
+        <div class="presets" id="presets" role="group" aria-label="Time frame"></div>
+        <div class="stepper">
+          <button type="button" class="arrow" id="prev" aria-label="Previous period">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+          </button>
+          <div class="range-label" id="range-label" aria-live="polite"></div>
+          <button type="button" class="arrow" id="next" aria-label="Next period">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+        <div>
+          <div class="timeline" id="timeline"></div>
+          <div class="hint"><span><span class="swatch" style="background:var(--warn)"></span>day above a limit</span><span>tap to jump · drag to move</span></div>
+        </div>
+        <form class="custom" id="custom" hidden>
+          <div class="fields">
+            <label for="from">From<input type="datetime-local" id="from" required></label>
+            <label for="to">To<input type="datetime-local" id="to" required></label>
+          </div>
+          <div class="row">
+            <span class="err" id="custom-err" role="alert"></span>
+            <button type="submit" class="primary">Show this range</button>
+          </div>
+        </form>
+        <div class="summary" id="summary-line" role="status"></div>
+      </section>
 
-  <main id="panels"></main>
+      <section class="card episodes-card" aria-labelledby="eps-title">
+        <h2 id="eps-title"><span>Above the limit</span><span class="note">tap one to zoom in</span></h2>
+        <div id="episodes"></div>
+      </section>
 
-  <template id="tpl-panel">
-    <section class="panel">
-      <header class="panel-head">
-        <h2></h2>
-        <span class="panel-note"></span>
-      </header>
-      <div class="panel-body"></div>
-    </section>
-  </template>
+      <section class="card main" aria-labelledby="chart-title">
+        <h2 class="visually-hidden" id="chart-title">Readings over time</h2>
+        <div class="controls">
+          <div class="toggles" id="pollutants" role="group" aria-label="Pollutants"></div>
+          <div class="detail" id="detail" role="group" aria-label="Detail"></div>
+        </div>
+        <div class="chart mainchart" id="chart"></div>
+        <div class="caption">
+          <span id="bucket-caption"></span>
+          <label class="check"><input type="checkbox" id="shade" checked> Shade above-limit periods</label>
+        </div>
+        <div class="caption"><span>Drag across the chart to zoom in · double-click to reset</span></div>
+      </section>
 
-  <footer class="foot">
-    <span id="foot-meta"></span>
-  </footer>
+      <section class="card levels" aria-labelledby="levels-title">
+        <h2 id="levels-title">Time by level</h2>
+        <div id="levels"></div>
+      </section>
+
+      <section class="card stats" aria-labelledby="stats-title">
+        <h2 id="stats-title">Statistics</h2>
+        <div id="stats"></div>
+      </section>
+
+      <section class="card hours" aria-labelledby="hours-title">
+        <h2 id="hours-title"><span id="hours-name">Hour of day</span><span class="note" id="hours-note"></span></h2>
+        <div class="chart" id="hours" style="height:150px"></div>
+      </section>
+
+      <section class="card week" aria-labelledby="week-title">
+        <h2 id="week-title"><span id="week-name">Weekday by hour</span><span class="note">bigger dot, dirtier hour</span></h2>
+        <div id="week"></div>
+      </section>
+    </main>
+
+    <footer class="foot" id="foot"></footer>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>

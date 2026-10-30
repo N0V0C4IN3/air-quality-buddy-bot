@@ -97,9 +97,21 @@ drift check on Postgres.
   link cannot carry `initData`, which is why the bot description should point at a
   `t.me` deep link rather than the raw URL.
 - **The web palette mirrors `charts.py` exactly.** `web-api/static/styles.css` restates
-  the same hex values as CSS custom properties, and the amber/red band hues stay reserved
-  for threshold state. Change one side and change the other, or the Telegram card and the
-  web view stop looking like the same product.
+  the same series and threshold hex values as CSS custom properties, and the amber/red
+  hues stay reserved for threshold state. Change one side and change the other, or the
+  Telegram card and the web view stop looking like the same product. The frosted
+  surfaces (`--bg`, `--card`, the glows) are the dashboard's own.
+- **The dashboard draws its own SVG.** No chart library and no build step:
+  `static/charts.js` draws the rings, the main chart, the 90-day timeline and the
+  pattern panels; `static/clock.js` formats every time in `meta.timezone` through Intl,
+  never the browser's zone. Charts colour themselves with `var(--…)`, so a theme switch
+  is a CSS change, not a redraw.
+- **One filter drives the page.** Range (a preset the server resolves - `today` and
+  `yesterday` are local calendar days - or an explicit pair), detail, pollutants and
+  shading all live in the URL. The page then steps from the instants the server
+  answered with. `/api/days` feeds the timeline (one row per local day, rolled up from
+  hourly buckets because SQL buckets are UTC-aligned); `/api/episodes` merges readings
+  over a warn limit into stretches, with gaps of up to two intervals bridged.
 - **`DASHBOARD_URL` must be HTTPS or absent.** Telegram refuses a `web_app` button with a
   plain-http URL, and that failure would take down every chart card, not just the button —
   so `reporter-bot/config.py` rejects it at boot and an unset value simply hides the button.

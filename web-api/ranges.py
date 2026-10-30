@@ -26,12 +26,15 @@ BUCKETS: dict[str, Optional[int]] = {
 # and the browser pays for all of them.
 MAX_POINTS = 1500
 
-# Ranges the buttons offer, as a span back from now. `today` is special: it
-# starts at local midnight, so it is expressed as a span of None.
+# Ranges the buttons offer, as a span back from now. `today` and `yesterday`
+# are calendar days in the configured timezone, not spans, so they are None
+# here and built from local midnight below - the browser's own timezone may
+# not be the sensor's.
 PRESETS: dict[str, Optional[timedelta]] = {
     "1h": timedelta(hours=1),
     "12h": timedelta(hours=12),
     "today": None,
+    "yesterday": None,
     "24h": timedelta(hours=24),
     "7d": timedelta(days=7),
     "30d": timedelta(days=30),
@@ -84,11 +87,20 @@ def parse_range(
 
     local_now = now.astimezone(tz)
     span = PRESETS[name]
-    if span is None:  # today
+    if span is None:
         midnight = datetime(local_now.year, local_now.month, local_now.day, tzinfo=tz)
+        if name == "today":
+            return TimeRange(
+                start=midnight.astimezone(timezone.utc),
+                end=local_now.astimezone(timezone.utc),
+                label=name,
+            )
+        # Yesterday's midnight is a calendar step, not 24 hours back: across a
+        # DST change the local day is 23 or 25 hours long.
+        prev = (midnight - timedelta(hours=12)).date()
         return TimeRange(
-            start=midnight.astimezone(timezone.utc),
-            end=local_now.astimezone(timezone.utc),
+            start=datetime(prev.year, prev.month, prev.day, tzinfo=tz).astimezone(timezone.utc),
+            end=midnight.astimezone(timezone.utc),
             label=name,
         )
     return TimeRange(

@@ -59,8 +59,8 @@ jobs:
 
   # Catches what pytest structurally cannot: a dependency used by `common/` but
   # missing from one service's requirements.txt (there is no shared file), an
-  # import-time error in code no test imports, and the uPlot fetch in web-api's
-  # Dockerfile breaking.
+  # import-time error in code no test imports, and web-api failing to
+  # serve the modules its page is made of.
   #
   # Runners are amd64; the Pi is aarch64. Add `platforms: linux/arm64` via QEMU
   # here if an arch-specific wheel ever bites - it is a lot slower.
@@ -135,8 +135,9 @@ jobs:
           done
           echo
           curl -fsS -o /dev/null -w 'index %{http_code}\n' http://127.0.0.1:8080/
-          curl -fsS -o /dev/null -w 'uplot %{http_code} %{size_download}b\n' \
-            http://127.0.0.1:8080/vendor/uPlot.iife.min.js
+          for f in app.js charts.js clock.js api.js styles.css; do
+            curl -fsS -o /dev/null -w "$f %{http_code} %{size_download}b\n" http://127.0.0.1:8080/$f
+          done
           docker rm -f web-api-ci
 
   # "Edited common/db.py, forgot the migration" is invisible until a container
