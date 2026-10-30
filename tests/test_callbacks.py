@@ -3,8 +3,9 @@ stay stable and reject anything else."""
 import pytest
 
 from callbacks import (
-    ALERT, INFO, MAX_BYTES, NEW_CARD, SUBSCRIBE, THEME, WINDOW, Callback,
-    CallbackError, decode, info_action, subscribe_action, theme_action, view_action,
+    ALERT, DISMISS, INFO, MAX_BYTES, NEW_CARD, SUBSCRIBE, THEME, WINDOW, Callback,
+    CallbackError, decode, dismiss_action, info_action, subscribe_action,
+    theme_action, view_action,
 )
 from reports import STATUS, VIEWS, Window
 
@@ -15,6 +16,8 @@ def every_action():
     for view in VIEWS:
         yield view_action(view)
         yield view_action(view, new_card=True)
+        yield dismiss_action(view)
+    yield dismiss_action()
     for on in CARDS:
         for theme in ("light", "dark"):
             yield theme_action(on, theme)
@@ -37,6 +40,12 @@ def test_settings_actions_round_trip_on_every_card(on):
     assert decode(info_action(on)) == Callback(INFO, on)
 
 
+def test_dismiss_actions_round_trip():
+    assert decode(dismiss_action()) == Callback(DISMISS, None)
+    for view in VIEWS:
+        assert decode(dismiss_action(view)) == Callback(DISMISS, view)
+
+
 def test_every_action_is_distinct_and_fits_telegram_limit():
     actions = list(every_action())
     assert len(set(actions)) == len(actions)
@@ -51,6 +60,8 @@ def test_the_wire_format_is_the_documented_one():
     assert theme_action(Window.PATTERNS, "dark") == "theme:patterns:dark"
     assert subscribe_action(None, False) == f"sub:{ALERT}:off"
     assert info_action(Window.TODAY) == "info:today"
+    assert dismiss_action() == "x:back"
+    assert dismiss_action(STATUS) == "x:status"
 
 
 @pytest.mark.parametrize("data, expected", [
@@ -72,9 +83,9 @@ def test_settings_buttons_carry_the_state_they_set():
 
 
 @pytest.mark.parametrize("data", [
-    "", "nonsense", "w", "w:", "w:yesterday", "x:today", "theme:", ":today", None,
+    "", "nonsense", "w", "w:", "w:yesterday", "y:today", "theme:", ":today", None,
     "sub:", "info:card", "w:alert", "n:alert", "theme:today:sepia", "sub:today:maybe",
-    "w:today:extra",
+    "w:today:extra", "x:", "x:alert", "x:today:extra", "w:back", "theme:back:dark",
 ])
 def test_malformed_data_is_rejected(data):
     with pytest.raises(CallbackError):

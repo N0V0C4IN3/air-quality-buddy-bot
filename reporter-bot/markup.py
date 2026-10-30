@@ -9,7 +9,7 @@ from typing import Optional
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-from keyboard_layout import Button, card_rows
+from keyboard_layout import Button, card_rows, info_rows
 from reports import View
 
 
@@ -19,11 +19,19 @@ def _button(b: Button) -> InlineKeyboardButton:
     return InlineKeyboardButton(b.label, callback_data=b.callback)
 
 
+def _markup(rows) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    for row in rows:
+        kb.row(*[_button(b) for b in row])
+    return kb
+
+
+def info_markup() -> InlineKeyboardMarkup:
+    return _markup(info_rows())
+
+
 def card_markup(on: Optional[View], *, theme: str = "light", subscribed: bool = False,
                 dashboard_url: str = "") -> InlineKeyboardMarkup:
     """Buttons under a card showing `on`; None for an alert."""
-    kb = InlineKeyboardMarkup()
-    for row in card_rows(on, theme=theme, subscribed=subscribed,
-                         dashboard_url=dashboard_url):
-        kb.row(*[_button(b) for b in row])
-    return kb
+    return _markup(card_rows(on, theme=theme, subscribed=subscribed,
+                             dashboard_url=dashboard_url))

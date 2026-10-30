@@ -20,7 +20,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from callbacks import info_action, subscribe_action, theme_action, view_action
+from callbacks import (
+    dismiss_action, info_action, subscribe_action, theme_action, view_action,
+)
 from reports import STATUS, View, Window
 
 # No emoji on the three time windows - each costs roughly two characters of
@@ -45,6 +47,7 @@ THEME_LABELS = {"light": "🌙 Dark mode", "dark": "☀️ Light mode"}
 SUBSCRIBE_LABELS = {False: "🔔 Subscribe", True: "🔕 Unsubscribe"}
 INFO_LABEL = "ℹ️ Info"
 DASHBOARD_LABEL = "📊 Dashboard"
+BACK_LABEL = "↩ Back"
 
 
 @dataclass(frozen=True)
@@ -94,3 +97,10 @@ def card_rows(on: Optional[View], *, theme: str, subscribed: bool,
          Button(subscribe_label(subscribed), subscribe_action(on, not subscribed))],
         last,
     ]
+
+
+def info_rows() -> list[list[Button]]:
+    """Under the info text, which is opened on top of a card: Back removes it
+    and leaves that card in view; Status swaps it for a fresh status card."""
+    return [[Button(BACK_LABEL, dismiss_action()),
+             Button(VIEW_LABELS[STATUS], dismiss_action(STATUS))]]

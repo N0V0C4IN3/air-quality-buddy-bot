@@ -11,8 +11,8 @@ import pytest
 
 pytest.importorskip("aiogram", reason="aiogram is a reporter-bot dependency, not a test one")
 
-from keyboard_layout import card_rows  # noqa: E402
-from markup import card_markup  # noqa: E402
+from keyboard_layout import card_rows, info_rows  # noqa: E402
+from markup import card_markup, info_markup  # noqa: E402
 from reports import VIEWS  # noqa: E402
 
 DASH = "https://air-quality-pi.tail03af11.ts.net"
@@ -35,3 +35,9 @@ def test_callback_buttons_carry_their_data_and_the_dashboard_a_web_app():
                 assert b.web_app.url == DASH and not b.callback_data
             else:
                 assert b.callback_data and not b.web_app
+
+
+def test_the_info_markup_is_the_plan():
+    kb = info_markup()
+    assert [[(b.text, b.callback_data) for b in row] for row in kb.inline_keyboard] == \
+        [[(b.label, b.callback) for b in row] for row in info_rows()]

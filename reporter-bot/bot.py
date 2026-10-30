@@ -9,7 +9,9 @@ from typing import Optional
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher.middlewares import BaseMiddleware
 from aiogram.types import MenuButtonWebApp, WebAppInfo
-from aiogram.utils.exceptions import MessageNotModified
+from aiogram.utils.exceptions import (
+    MessageCantBeDeleted, MessageNotModified, MessageToDeleteNotFound,
+)
 
 from common.alerts import Alert
 from common.db import Database
@@ -19,7 +21,7 @@ from consumer import AsyncConsumer
 from html_helpers import info_text
 import callbacks
 from keyboard_layout import other_theme
-from markup import card_markup
+from markup import card_markup, info_markup
 from reports import STATUS, ReadingReports, Report, View, Window
 from subscriber_cache import RedisSubscriberCache
 from subscriptions import Subscriptions
@@ -145,9 +147,14 @@ async def status_cmd(message: types.Message):
     await send_card(message.chat.id, STATUS)
 
 
+async def send_info(chat_id: int) -> None:
+    await bot.send_message(chat_id, info_text(settings.thresholds),
+                           reply_markup=info_markup(), disable_web_page_preview=True)
+
+
 @dp.message_handler(commands=["info"])
 async def info_cmd(message: types.Message):
-    await message.answer(info_text(settings.thresholds), disable_web_page_preview=True)
+    await send_info(message.chat.id)
 
 
 # ---- the reply keyboard older versions left behind ----
@@ -272,8 +279,21 @@ async def _on_subscribe(call: types.CallbackQuery, cb: callbacks.Callback) -> No
 async def _on_info(call: types.CallbackQuery, cb: callbacks.Callback) -> None:
     """Info is text, not a chart, so it arrives as its own message."""
     await call.answer()
-    await call.message.answer(info_text(settings.thresholds),
-                              disable_web_page_preview=True)
+    await send_info(call.message.chat.id)
+
+
+async def _on_dismiss(call: types.CallbackQuery, cb: callbacks.Callback) -> None:
+    """Back (and Status) under the info text: remove it, then open the view."""
+    await call.answer()
+    try:
+        await call.message.delete()
+    except (MessageCantBeDeleted, MessageToDeleteNotFound):
+        # Telegram lets a bot delete its messages for 48 hours. Past that the
+        # text stays, but its buttons go, so they cannot be tapped again.
+        with suppress(MessageNotModified):
+            await call.message.edit_reply_markup(reply_markup=None)
+    if cb.view is not None:
+        await send_card(call.message.chat.id, cb.view)
 
 
 BUTTON_HANDLERS = {
@@ -282,6 +302,7 @@ BUTTON_HANDLERS = {
     callbacks.THEME: _on_theme,
     callbacks.SUBSCRIBE: _on_subscribe,
     callbacks.INFO: _on_info,
+    callbacks.DISMISS: _on_dismiss,
 }
 
 

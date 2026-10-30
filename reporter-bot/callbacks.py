@@ -12,6 +12,10 @@ stable and be testable without aiogram.
     theme:<card>:light|dark    set the chart theme, redraw this card
     sub:<card>:on|off          set alerts, redraw this card's buttons
     info:<card>                send the info text; the card stays as it is
+    x:back                     delete this message (the info text), which
+                               leaves the card it was opened from in view
+    x:<view>                   delete this message, then send that view as
+                               a new card
 
 `<card>` is what the tapped card shows - a view slug, or `alert` - so a
 settings tap knows what to redraw. Settings buttons carry the state they set,
@@ -34,10 +38,13 @@ NEW_CARD = "n"
 THEME = "theme"
 SUBSCRIBE = "sub"
 INFO = "info"
-ACTIONS = (WINDOW, NEW_CARD, THEME, SUBSCRIBE, INFO)
+DISMISS = "x"
+ACTIONS = (WINDOW, NEW_CARD, THEME, SUBSCRIBE, INFO, DISMISS)
 
 # The <card> slug of an alert. Not a view: an alert cannot be re-rendered.
 ALERT = "alert"
+# The x: slug that only dismisses, opening nothing.
+BACK = "back"
 THEME_ARGS = ("light", "dark")
 SUBSCRIBE_ARGS = {"on": True, "off": False}
 MAX_BYTES = 64
@@ -50,8 +57,8 @@ class CallbackError(ValueError):
 @dataclass(frozen=True)
 class Callback:
     action: str
-    # The target view for w/n; the view on the tapped card for the rest,
-    # None when that card is an alert.
+    # The target view for w/n/x; the view on the tapped card for the rest.
+    # None when that card is an alert, or for x:back.
     view: Optional[View]
     # light/dark for theme, on/off for sub; None means a legacy toggle.
     arg: Optional[str] = None
@@ -87,6 +94,11 @@ def info_action(on: Optional[View]) -> str:
     return _encode(INFO, _card(on))
 
 
+def dismiss_action(then: Optional[View] = None) -> str:
+    """Delete the tapped message, then open `then` as a new card if given."""
+    return _encode(DISMISS, then.slug if then is not None else BACK)
+
+
 def decode(data: str) -> Callback:
     """`w:last_12h` -> Callback("w", Window.LAST_12H)."""
     action, _, rest = (data or "").partition(":")
@@ -94,7 +106,9 @@ def decode(data: str) -> Callback:
     if action not in ACTIONS or not slug:
         raise CallbackError(f"unknown callback data: {data!r}")
 
-    if slug == ALERT and action not in (WINDOW, NEW_CARD):
+    # The slugs that name no view: an alert card, and a dismiss that opens nothing.
+    no_view = BACK if action == DISMISS else None if action in (WINDOW, NEW_CARD) else ALERT
+    if slug == no_view:
         view = None
     else:
         try:

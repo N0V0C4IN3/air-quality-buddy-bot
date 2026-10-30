@@ -6,10 +6,10 @@ all four shared one row.
 """
 import pytest
 
-from callbacks import NEW_CARD, SUBSCRIBE, THEME, WINDOW, decode
+from callbacks import DISMISS, NEW_CARD, SUBSCRIBE, THEME, WINDOW, decode
 from keyboard_layout import (
-    ACTIVE_MARK, ROW_BUDGET, VIEW_LABELS, button_label, card_rows, subscribe_label,
-    theme_label,
+    ACTIVE_MARK, ROW_BUDGET, VIEW_LABELS, button_label, card_rows, info_rows,
+    subscribe_label, theme_label,
 )
 from reports import STATUS, VIEWS, Window
 
@@ -147,3 +147,14 @@ def test_the_dashboard_button_opens_the_url():
 def test_button_label_is_stable_for_inactive_views():
     assert button_label(Window.LAST_7D, STATUS) == VIEW_LABELS[Window.LAST_7D]
     assert subscribe_label(True) == "🔕 Unsubscribe"
+
+
+def test_the_info_text_offers_back_and_status():
+    """Back removes the info text, leaving the card it was opened from in
+    view; Status replaces it with a fresh status card."""
+    [row] = info_rows()
+    assert [b.label for b in row] == ["↩ Back", "📟 Status"]
+    assert [decode(b.callback) for b in row] == [
+        decode(f"{DISMISS}:back"), decode(f"{DISMISS}:status")]
+    assert decode(row[1].callback).view is STATUS
+    assert all(width(b.label) <= ROW_BUDGET // len(row) for b in row)
