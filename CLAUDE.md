@@ -101,6 +101,12 @@ drift check on Postgres.
   hues stay reserved for threshold state. Change one side and change the other, or the
   Telegram card and the web view stop looking like the same product. The frosted
   surfaces (`--bg`, `--card`, the glows) are the dashboard's own.
+- **Static files are `no-cache`, and their URLs carry `?v=`.** Telegram's iOS web view
+  reuses an asset with no Cache-Control indefinitely, so a redesign once shipped as the
+  new `index.html` over the old `app.js` and `styles.css`. `RevalidatedStaticFiles` in
+  `web-api/api.py` makes every reuse a 304 check; the `?v=` on every `<link>`, `<script>`
+  and module import is for copies cached before that header existed - keep it identical
+  everywhere (a test holds it) or a module loads twice.
 - **The dashboard draws its own SVG.** No chart library and no build step:
   `static/charts.js` draws the rings, the main chart, the 90-day timeline and the
   pattern panels; `static/clock.js` formats every time in `meta.timezone` through Intl,

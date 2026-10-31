@@ -326,3 +326,30 @@ def test_a_browser_visitor_has_nowhere_to_store_a_theme(service):
     r = TestClient(app).post("/api/theme", params={"token": "s3cret"},
                              json={"theme": "dark"})
     assert r.status_code == 403
+
+
+# ---------- the page itself ----------
+
+STATIC = __import__("pathlib").Path(__file__).resolve().parents[1] / "web-api" / "static"
+
+
+def test_static_files_must_be_revalidated_not_reused_on_a_guess(service):
+    """Without Cache-Control, Telegram's iOS web view kept a weeks-old app.js and
+    styles.css under a new index.html: the redesign shipped unstyled."""
+    app = create_app(service=service, guard=AccessGuard(AuthMode.PUBLIC, bot_token=TOKEN),
+                     tz=KYIV, static_dir=str(STATIC))
+    c = TestClient(app)
+    for path in ("/", "/app.js?v=2", "/charts.js", "/styles.css"):
+        r = c.get(path)
+        assert r.status_code == 200, path
+        assert r.headers["cache-control"] == "no-cache", path
+
+
+def test_every_local_asset_url_carries_the_same_version():
+    """One version everywhere: a module imported under two URLs loads twice."""
+    import re
+    refs = re.findall(r'(?:href|src)="([\w./]+\.(?:css|js)[^"]*)"', (STATIC / "index.html").read_text("utf-8"))
+    for js in STATIC.glob("*.js"):
+        refs += re.findall(r'from "\./([^"]+)"', js.read_text("utf-8"))
+    versions = {r.partition("?")[2] for r in refs}
+    assert refs and len(versions) == 1 and versions != {""}, refs

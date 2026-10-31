@@ -9,9 +9,9 @@
  * timezone; the page then works from the instants the server answered with
  * (state.current), so stepping back from "Today" lands on real local days. */
 
-import { api, ApiError, telegram } from "./api.js";
-import { DAY, HOUR, MINUTE, ago, duration, makeClock } from "./clock.js";
-import { LEVEL, NAME, f1, hourBars, mainChart, ring, sized, timeline, weekMatrix } from "./charts.js";
+import { api, ApiError, telegram } from "./api.js?v=2";
+import { DAY, HOUR, MINUTE, ago, duration, makeClock } from "./clock.js?v=2";
+import { LEVEL, NAME, f1, hourBars, mainChart, ring, sized, timeline, weekMatrix } from "./charts.js?v=2";
 
 const PRESETS = [
   ["24h", "24 hours", DAY], ["today", "Today", null], ["yesterday", "Yesterday", DAY],

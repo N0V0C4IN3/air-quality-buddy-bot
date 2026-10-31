@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Air Quality</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=2">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -103,6 +103,8 @@
     <footer class="foot" id="foot"></footer>
   </div>
 
-  <script type="module" src="app.js"></script>
+  <!-- The ?v= busts copies a client cached before the server sent
+       Cache-Control. Bump it, and the one on every import, when a file changes shape. -->
+  <script type="module" src="app.js?v=2"></script>
 </body>
 </html>

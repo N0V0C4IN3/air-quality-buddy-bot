@@ -6,7 +6,7 @@
  * redrawing. The amber/red hues (--warn/--err) only ever mark threshold state,
  * never a series - the same rule the bot's PNGs follow. */
 
-import { DAY, HOUR } from "./clock.js";
+import { DAY, HOUR } from "./clock.js?v=2";
 
 const NS = "http://www.w3.org/2000/svg";
 let uid = 0;

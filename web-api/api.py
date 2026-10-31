@@ -131,6 +131,22 @@ def create_app(
     if static_dir:
         # Mounted last: a bare "/" mount swallows every path that did not match
         # a route above it.
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+        app.mount("/", RevalidatedStaticFiles(directory=static_dir, html=True), name="static")
 
     return app
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    """StaticFiles that makes the browser ask before reusing a file.
+
+    Starlette sends an ETag and Last-Modified but no Cache-Control, which leaves
+    freshness to the browser's heuristic - and Telegram's iOS web view kept a
+    weeks-old app.js and styles.css under a new index.html, so a redesign
+    shipped as a page with the old script and no styling. no-cache still
+    caches: every reuse is one conditional request answered 304.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
