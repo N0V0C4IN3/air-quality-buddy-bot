@@ -151,7 +151,7 @@ def test_health_needs_no_credential(client):
 
 def test_every_data_route_is_guarded(client):
     for path in ("/api/meta", "/api/latest", "/api/series", "/api/summary",
-                 "/api/patterns", "/api/days", "/api/episodes"):
+                 "/api/patterns", "/api/episodes"):
         assert client.get(path).status_code == 401, path
 
 
@@ -257,23 +257,6 @@ def test_a_range_with_nothing_over_the_limit_has_no_episodes(client):
     body = client.get("/api/episodes", params={"from": START.isoformat(),
                       "to": (START + timedelta(hours=6)).isoformat()}, headers=auth()).json()
     assert body == {**body, "count": 0, "episodes": []}
-
-
-def test_days_are_local_calendar_days_flagged_by_their_worst_reading(service):
-    body = service.days(now=START + timedelta(days=2))
-    days = {d["date"]: d for d in body["days"]}
-    # 00:00 UTC is 02:00 in Kyiv, so two UTC days touch three local ones.
-    assert list(days) == ["2026-03-10", "2026-03-11", "2026-03-12"]
-    assert days["2026-03-11"]["count"] == 288
-    assert days["2026-03-11"]["level"] == "warn"
-    assert days["2026-03-11"]["pm25_max"] == 40.0
-    assert days["2026-03-12"]["level"] == "ok"      # only 00:00-02:00 local
-    assert datetime.fromisoformat(days["2026-03-11"]["start"]).astimezone(KYIV).hour == 0
-
-
-def test_days_route_answers(client):
-    body = client.get("/api/days", headers=auth()).json()
-    assert set(body) == {"from", "to", "days"}
 
 
 def test_a_bad_range_is_a_400_not_a_500(client):

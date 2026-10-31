@@ -1,12 +1,11 @@
 /* Every chart on the page, drawn as SVG.
  *
- * No chart library: the page has five small, specific charts, and the Mini App
+ * No chart library: the page has two specific charts, and the Mini App
  * has to load fast on a phone. Colours are CSS custom properties referenced by
  * name (style="fill:var(--pm25)"), so switching theme repaints without
  * redrawing. The amber/red hues (--warn/--err) only ever mark threshold state,
  * never a series - the same rule the bot's PNGs follow. */
 
-import { DAY, HOUR } from "./clock.js?v=2";
 
 const NS = "http://www.w3.org/2000/svg";
 let uid = 0;
@@ -39,9 +38,12 @@ const text = (x, y, t, style, anchor) =>
 function root(w, h, label) {
   return sv("svg", { width: w, height: h, viewBox: `0 0 ${w} ${h}`, role: "img", "aria-label": label });
 }
+/* The filter region covers the whole drawing. Left to the default it is sized
+ * to the bounding box of what it blurs, so on a short arc the blur was cut off
+ * into a hard-edged square beside the ring's knob. */
 function glow(svg, sd = 3) {
-  const id = nid("glow");
-  svg.append(sv("defs", {}, sv("filter", { id, x: "-20%", y: "-50%", width: "140%", height: "200%" }, [
+  const id = nid("glow"), w = +svg.getAttribute("width"), h = +svg.getAttribute("height");
+  svg.append(sv("defs", {}, sv("filter", { id, filterUnits: "userSpaceOnUse", x: -20, y: -20, width: w + 40, height: h + 40 }, [
     sv("feGaussianBlur", { stdDeviation: sd, result: "b" }),
     sv("feMerge", {}, [sv("feMergeNode", { in: "b" }), sv("feMergeNode", { in: "SourceGraphic" })]),
   ])));
@@ -211,6 +213,19 @@ export function mainChart(w, h, host, { series, keys, limits, clock, shade, onZo
   const place = (left, y) => { tip.style.left = `${Math.min(Math.max(left, 0), w - tip.offsetWidth)}px`; tip.style.top = `${y}px`; };
   let down = null;
   hit.addEventListener("pointerdown", (e) => { down = pxOf(e); hit.setPointerCapture(e.pointerId); });
+  const read = (px) => {
+    const i = nearest(px), cx = x(mid(i)), s = series.t[i] * 1000;
+    vline.setAttribute("x1", cx); vline.setAttribute("x2", cx);
+    keys.forEach((k, j) => { dots[j].setAttribute("cx", cx); dots[j].setAttribute("cy", ys[k](series[k].avg[i])); });
+    cursor.style.opacity = 1;
+    const when = raw ? `${clock.day(s)} ${clock.hhmm(s)}` : `${clock.day(s)} ${clock.hhmm(s)}–${clock.hhmm(Math.min(b, s + size))}`;
+    tip.innerHTML = when + keys.map((k) =>
+      `<br><span class="swatch" style="background:var(--${k})"></span>${NAME[k]} <b>${f1(series[k].avg[i])}</b>` +
+      (raw ? "" : ` <span class="range">(${f1(series[k].min[i])}–${f1(series[k].max[i])})</span>`)).join("");
+    tip.style.opacity = 1;
+    place(cx - tip.offsetWidth / 2, top - 6);
+  };
+  const hide = () => { cursor.style.opacity = 0; tip.style.opacity = 0; };
   hit.addEventListener("pointermove", (e) => {
     const px = pxOf(e);
     if (down != null && Math.abs(px - down) > 6) {
@@ -223,137 +238,23 @@ export function mainChart(w, h, host, { series, keys, limits, clock, shade, onZo
       place(l, top + 30);
       return;
     }
-    const i = nearest(px), cx = x(mid(i)), s = series.t[i] * 1000;
-    vline.setAttribute("x1", cx); vline.setAttribute("x2", cx);
-    keys.forEach((k, j) => { dots[j].setAttribute("cx", cx); dots[j].setAttribute("cy", ys[k](series[k].avg[i])); });
-    cursor.style.opacity = 1;
-    const when = raw ? `${clock.day(s)} ${clock.hhmm(s)}` : `${clock.day(s)} ${clock.hhmm(s)}–${clock.hhmm(Math.min(b, s + size))}`;
-    tip.innerHTML = when + keys.map((k) =>
-      `<br><span class="swatch" style="background:var(--${k})"></span>${NAME[k]} <b>${f1(series[k].avg[i])}</b>` +
-      (raw ? "" : ` <span class="range">(${f1(series[k].min[i])}–${f1(series[k].max[i])})</span>`)).join("");
-    tip.style.opacity = 1;
-    place(cx - tip.offsetWidth / 2, top - 6);
+    if (down != null || e.pointerType === "mouse") read(px);
   });
+  // A finger has no hover: a tap leaves the reading up, and a second tap
+  // within 300 ms zooms out (iOS does not fire dblclick on an SVG).
+  let lastTap = 0;
   hit.addEventListener("pointerup", (e) => {
     const px = pxOf(e), start = down;
     down = null;
     sel.style.display = "none";
-    if (start != null && Math.abs(px - start) > 6) onZoom(tAt(Math.min(px, start)), tAt(Math.max(px, start)));
+    if (start != null && Math.abs(px - start) > 6) return onZoom(tAt(Math.min(px, start)), tAt(Math.max(px, start)));
+    if (e.pointerType === "mouse") return;
+    if (e.timeStamp - lastTap < 300) { lastTap = 0; hide(); return onReset(); }
+    lastTap = e.timeStamp;
+    read(px);
   });
-  hit.addEventListener("pointerleave", () => { if (down == null) { cursor.style.opacity = 0; tip.style.opacity = 0; } });
+  hit.addEventListener("pointercancel", () => { down = null; sel.style.display = "none"; hide(); });
+  hit.addEventListener("pointerleave", (e) => { if (down == null && e.pointerType === "mouse") hide(); });
   hit.addEventListener("dblclick", onReset);
   host.append(svg, tip);
 }
-
-// ---------- the 90-day timeline ----------
-
-/* An overview of every day kept, with a window marking the range on screen.
- * Tap a day to centre the range there; drag the window to move it, or its
- * edges to resize it. Nothing is fetched until the drag ends. */
-export function timeline(w, h, host, { days, start, end, range, clock, onPreview, onCommit, onJump, minSpan }) {
-  const svg = root(w, h, "Timeline of the days kept. Tap a day to move the range there, or drag the highlighted window.");
-  svg.setAttribute("tabindex", "0");
-  const top = 12, bottom = h - 16;
-  const x = lin(start, end, 0, w), tOf = (px) => start + (px / w) * (end - start);
-  const max = Math.max(1, ...days.map((d) => d.pm25_max));
-  const pts = days.map((d) => [x(Date.parse(d.start) + DAY / 2), bottom - (d.pm25_max / max) * (bottom - top - 4)]);
-  if (pts.length) {
-    svg.append(sv("path", { d: `${monotone(pts)}L${pts.at(-1)[0]},${bottom}L${pts[0][0]},${bottom}Z`, fill: fade(svg, "var(--pm25)", 0.5, 0.05) }));
-    svg.append(sv("path", { d: monotone(pts), style: "fill:none;stroke:var(--pm25);stroke-width:1.2;stroke-opacity:.8" }));
-  }
-  for (const d of days) {
-    if (d.level === "ok") continue;
-    svg.append(sv("circle", { cx: x(Date.parse(d.start) + DAY / 2), cy: 5, r: 2.6, style: `fill:var(--${d.level})` },
-      sv("title", { text: `${clock.day(Date.parse(d.start))}: ${LEVEL[d.level].label.toLowerCase()} at its worst` })));
-  }
-  let month = null;
-  for (const d of days) {
-    const t = Date.parse(d.start), m = clock.month(t);
-    if (m !== month && clock.parts(t).day <= 7) { month = m; svg.append(text(x(t), h - 2, m, "font-size:10px;fill:var(--ink2)")); }
-  }
-
-  const minW = 14;
-  const shadeOut = sv("path", { class: "outside" });
-  const win = sv("rect", { y: top - 4, height: bottom - top + 4, rx: 6, class: "window", "data-part": "win" });
-  const hl = sv("rect", { y: top + 6, height: bottom - top - 16, width: 6, rx: 3, class: "handle", "data-part": "l" });
-  const hr = sv("rect", { y: top + 6, height: bottom - top - 16, width: 6, rx: 3, class: "handle", "data-part": "r" });
-  svg.append(shadeOut, win, hl, hr);
-  let view = range.slice();
-  const place = ([a, b]) => {
-    let xa = x(a), xb = x(b);
-    if (xb - xa < minW) { const m = (xa + xb) / 2; xa = m - minW / 2; xb = m + minW / 2; }
-    win.setAttribute("x", xa); win.setAttribute("width", xb - xa);
-    hl.setAttribute("x", xa - 3); hr.setAttribute("x", xb - 3);
-    shadeOut.setAttribute("d", `M0,${top - 4}H${xa}V${bottom}H0Z M${xb},${top - 4}H${w}V${bottom}H${xb}Z`);
-  };
-  place(view);
-
-  let drag = null;
-  svg.addEventListener("pointerdown", (e) => {
-    const px = e.clientX - svg.getBoundingClientRect().left, part = e.target.dataset && e.target.dataset.part;
-    if (!part) { onJump(tOf(px)); return; }
-    drag = { part, px, a: range[0], b: range[1] };
-    svg.setPointerCapture(e.pointerId);
-    win.classList.add("dragging");
-  });
-  svg.addEventListener("pointermove", (e) => {
-    if (!drag) return;
-    const dt = ((e.clientX - svg.getBoundingClientRect().left - drag.px) / w) * (end - start);
-    let { a, b } = drag;
-    if (drag.part === "win") { const span = b - a; a = Math.min(Math.max(start, a + dt), end - span); b = a + span; }
-    if (drag.part === "l") a = Math.min(Math.max(start, a + dt), b - minSpan);
-    if (drag.part === "r") b = Math.max(Math.min(end, b + dt), a + minSpan);
-    view = [a, b];
-    place(view);
-    onPreview(view);
-  });
-  const finish = () => {
-    if (!drag) return;
-    drag = null;
-    win.classList.remove("dragging");
-    onCommit(view[0], view[1]);
-  };
-  svg.addEventListener("pointerup", finish);
-  svg.addEventListener("pointercancel", finish);
-  host.append(svg);
-}
-
-// ---------- hour of day ----------
-
-export function hourBars(w, h, host, { values, key }) {
-  const svg = root(w, h, `Average ${NAME[key]} by hour of day`);
-  const fill = fade(svg, `var(--${key})`, 0.95, 0.35);
-  const known = values.filter((v) => v != null);
-  const max = Math.max(...known), peak = values.indexOf(max);
-  const bw = (w - 8) / 24, y = lin(0, max * 1.15, h - 20, 14);
-  values.forEach((v, i) => {
-    if (i % 6 === 0) svg.append(text(4 + i * bw + bw / 2, h - 4, String(i).padStart(2, "0"), "font-size:10px;fill:var(--ink2)", "middle"));
-    if (v == null) return;
-    svg.append(sv("rect", { x: 4 + i * bw + bw * 0.18, y: y(v), width: bw * 0.64, height: h - 20 - y(v), rx: Math.min(4, bw * 0.3), fill, style: `opacity:${i === peak ? 1 : 0.6}` },
-      sv("title", { text: `${String(i).padStart(2, "0")}:00 · ${f1(v)} µg/m³` })));
-  });
-  svg.append(text(4 + peak * bw + bw / 2, y(max) - 4, f1(max), "font-size:10px;font-weight:600;fill:var(--ink)", "middle"));
-  host.append(svg);
-  return peak;
-}
-
-// ---------- weekday by hour ----------
-
-export function weekMatrix(w, h, host, { grid, days, key }) {
-  const svg = root(w, h, `Average ${NAME[key]} by weekday and hour`);
-  const known = grid.flat().filter((v) => v != null), max = Math.max(...known);
-  const L = 34, top = 16, cw = (w - L - 4) / 24, rh = (h - top - 4) / 7, rmax = Math.min(cw, rh) / 2 - 1;
-  days.forEach((label, r) => {
-    svg.append(text(0, top + r * rh + rh / 2 + 4, label, "font-size:10px;fill:var(--ink2)"));
-    grid[r].forEach((v, c) => {
-      const cx = L + c * cw + cw / 2, cy = top + r * rh + rh / 2;
-      if (v == null) { svg.append(sv("circle", { cx, cy, r: 1.5, style: "fill:var(--line)" })); return; }
-      svg.append(sv("circle", { cx, cy, r: Math.max(1.5, Math.sqrt(v / max) * rmax), style: `fill:var(--${key});fill-opacity:${0.25 + (0.75 * v) / max}` },
-        sv("title", { text: `${label} ${String(c).padStart(2, "0")}:00 · ${f1(v)} µg/m³` })));
-    });
-  });
-  for (const hh of [0, 6, 12, 18]) svg.append(text(L + hh * cw + cw / 2, 10, String(hh).padStart(2, "0"), "font-size:10px;fill:var(--ink2)", "middle"));
-  host.append(svg);
-}
-
-export { HOUR };

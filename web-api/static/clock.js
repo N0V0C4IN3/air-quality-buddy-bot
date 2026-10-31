@@ -18,7 +18,6 @@ export function makeClock(timeZone) {
   });
   const dayFmt = new Intl.DateTimeFormat("en-GB", { timeZone, weekday: "short", day: "numeric", month: "short" });
   const shortFmt = new Intl.DateTimeFormat("en-GB", { timeZone, day: "numeric", month: "short" });
-  const monthFmt = new Intl.DateTimeFormat("en-GB", { timeZone, month: "short" });
 
   function parts(ms) {
     const o = {};
@@ -31,24 +30,8 @@ export function makeClock(timeZone) {
     hhmm: (ms) => { const p = parts(ms); return `${pad(p.hour)}:${pad(p.minute)}`; },
     day: (ms) => dayFmt.format(ms),          // "Sat 31 Oct"
     short: (ms) => shortFmt.format(ms),      // "31 Oct"
-    month: (ms) => monthFmt.format(ms),      // "Oct"
     weekday: (ms) => parts(ms).weekday,      // "Sat"
     isMidnight: (ms) => { const p = parts(ms); return p.hour === 0 && p.minute === 0; },
-    /* <input type="datetime-local"> holds a naive wall time; these read and
-     * write it as the sensor's wall time rather than the browser's. */
-    toInput(ms) {
-      const p = parts(ms);
-      return `${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(p.hour)}:${pad(p.minute)}`;
-    },
-    fromInput(value) {
-      const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value || "");
-      if (!m) return NaN;
-      const wall = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
-      const offsetAt = (ms) => { const p = parts(ms); return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - Math.floor(ms / MINUTE) * MINUTE; };
-      let ms = wall - offsetAt(wall);
-      ms = wall - offsetAt(ms);            // second pass settles a DST edge
-      return ms;
-    },
     sameDay(a, b) {
       const p = parts(a), q = parts(b);
       return p.year === q.year && p.month === q.month && p.day === q.day;

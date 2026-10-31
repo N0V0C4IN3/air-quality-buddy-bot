@@ -108,16 +108,16 @@ drift check on Postgres.
   and module import is for copies cached before that header existed - keep it identical
   everywhere (a test holds it) or a module loads twice.
 - **The dashboard draws its own SVG.** No chart library and no build step:
-  `static/charts.js` draws the rings, the main chart, the 90-day timeline and the
-  pattern panels; `static/clock.js` formats every time in `meta.timezone` through Intl,
-  never the browser's zone. Charts colour themselves with `var(--…)`, so a theme switch
-  is a CSS change, not a redraw.
-- **One filter drives the page.** Range (a preset the server resolves - `today` and
-  `yesterday` are local calendar days - or an explicit pair), detail, pollutants and
-  shading all live in the URL. The page then steps from the instants the server
-  answered with. `/api/days` feeds the timeline (one row per local day, rolled up from
-  hourly buckets because SQL buckets are UTC-aligned); `/api/episodes` merges readings
-  over a warn limit into stretches, with gaps of up to two intervals bridged.
+  `static/charts.js` draws the "Now" rings and the main chart; `static/clock.js` formats
+  every time in `meta.timezone` through Intl, never the browser's zone. Charts colour
+  themselves with `var(--…)`, so a theme switch is a CSS change, not a redraw.
+- **One column, one filter.** The page is the rings, the chart, three numbers and the
+  stretches above a limit. The period switch (24 hours / 7 days / 30 days) is the only
+  filter: a bar along the bottom of a phone, in the header from 900px, where the layout
+  becomes two columns. Anything finer is a drag across the chart, which zooms to an
+  explicit pair of instants; a tap reads a value and a double tap zooms out. Period, zoom,
+  detail and pollutants live in the URL. `/api/episodes` merges readings over a warn
+  limit into stretches, with gaps of up to two intervals bridged.
 - **`DASHBOARD_URL` must be HTTPS or absent.** Telegram refuses a `web_app` button with a
   plain-http URL, and that failure would take down every chart card, not just the button —
   so `reporter-bot/config.py` rejects it at boot and an unset value simply hides the button.

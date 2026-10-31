@@ -53,10 +53,8 @@ function rangeParams(range) {
 export const api = {
   meta: () => request("api/meta"),
   latest: () => request("api/latest"),
-  days: () => request("api/days"),
   series: (range, bucket) => request("api/series", { ...rangeParams(range), bucket }),
   summary: (range) => request("api/summary", rangeParams(range)),
-  patterns: (range) => request("api/patterns", rangeParams(range)),
   episodes: (range) => request("api/episodes", rangeParams(range)),
   setTheme: (theme) => request("api/theme", null, {
     method: "POST",

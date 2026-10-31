@@ -430,7 +430,6 @@ def step_smoke() -> None:
         ("GET  /api/summary?range=7d", *_get("/api/summary?range=7d")),
         ("GET  /api/patterns?range=7d", *_get("/api/patterns?range=7d")),
         ("GET  /", *_get("/")),
-        ("GET  /api/days", *_get("/api/days")),
         ("GET  /api/episodes?range=7d", *_get("/api/episodes?range=7d")),
         ("GET  /api/series?range=yesterday", *_get("/api/series?range=yesterday")),
         ("GET  /app.js", *_get("/app.js")),

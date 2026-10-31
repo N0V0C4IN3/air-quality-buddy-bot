@@ -211,54 +211,6 @@ class DashboardService:
             },
         }
 
-    # ---------- the timeline ----------
-
-    def days(self, *, now: Optional[datetime] = None, days: Optional[int] = None) -> dict:
-        """One row per local calendar day, oldest first: the 90-day timeline.
-
-        Rolled up from hourly buckets rather than daily ones, because SQL
-        buckets are aligned to the epoch - a UTC day - and the timeline's days
-        are the sensor's. 90 days is ~2k hourly rows.
-        """
-        now = now or datetime.now(timezone.utc)
-        n = max(1, min(days or self._retention_days, self._retention_days))
-        local_now = now.astimezone(self._tz)
-        first = local_now.date() - timedelta(days=n - 1)
-        start = datetime(first.year, first.month, first.day, tzinfo=self._tz)
-        with self._db.session() as s:
-            hourly = ReadingRepository(s).get_buckets(
-                start=start.astimezone(timezone.utc), end=now, bucket_seconds=3600,
-            )
-
-        by_day: dict = {}
-        for b in hourly:
-            day = b.start.astimezone(self._tz).date()
-            d = by_day.setdefault(day, {"n": 0, "sum25": 0.0, "max25": 0.0, "max10": 0.0})
-            d["n"] += b.count
-            d["sum25"] += b.pm25_avg * b.count
-            d["max25"] = max(d["max25"], b.pm25_max)
-            d["max10"] = max(d["max10"], b.pm10_max)
-
-        out = []
-        for day, d in sorted(by_day.items()):
-            level = self._thresholds.level(d["max25"], d["max10"])
-            out.append({
-                "date": day.isoformat(),
-                "start": datetime(day.year, day.month, day.day, tzinfo=self._tz)
-                .astimezone(timezone.utc).isoformat(),
-                "count": d["n"],
-                "pm25_avg": round(d["sum25"] / d["n"], 1),
-                "pm25_max": round(d["max25"], 1),
-                "pm10_max": round(d["max10"], 1),
-                # The worst reading of the day decides, as it does for alerts.
-                "level": level.value,
-            })
-        return {
-            "from": start.astimezone(timezone.utc).isoformat(),
-            "to": now.isoformat(),
-            "days": out,
-        }
-
     # ---------- episodes ----------
 
     def episodes(self, rng: TimeRange, *, limit: int = 20) -> dict:

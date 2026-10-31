@@ -1,7 +1,7 @@
 /* Aurora: frosted cards over a slow colour field.
  *
  * The series and threshold hues mirror reporter-bot/charts.py exactly
- * (--pm25, --pm10, --ok, --warn, --err, and the --h ramp), so a chart here and
+ * (--pm25, --pm10, --ok, --warn, --err), so a chart here and
  * a card in Telegram read as the same product. The amber/red hues are reserved
  * for threshold state and are never used for a series. The surfaces are the
  * dashboard's own. */
@@ -67,8 +67,10 @@ button:disabled { opacity: .35; cursor: default; }
 .g1 { width: 380px; height: 380px; background: var(--glow-a); top: -120px; left: -80px; }
 .g2 { width: 420px; height: 420px; background: var(--glow-b); top: 420px; right: -160px; }
 
-.app { position: relative; z-index: 1; max-width: 1240px; margin: 0 auto; padding: 18px 16px 26px; }
-.top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 10px; }
+/* Phone first: one column, and the period switch is a bar fixed along the
+ * bottom of the screen, where the thumb is. */
+.app { position: relative; z-index: 1; max-width: 1240px; margin: 0 auto; padding: 18px 14px calc(96px + env(safe-area-inset-bottom)); }
+.top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 10px; }
 .brand { display: flex; align-items: center; gap: 9px; }
 .brand h1 { font-size: 17px; margin: 0; }
 .live { width: 9px; height: 9px; border-radius: 50%; background: var(--ink2); flex: none; }
@@ -79,6 +81,17 @@ button:disabled { opacity: .35; cursor: default; }
 .updated { font-size: 12px; color: var(--ink2); }
 .icon { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--edge); background: var(--field); display: grid; place-items: center; }
 
+.periods {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+  padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid var(--edge);
+}
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; padding: 3px; border-radius: 14px; border: 1px solid var(--edge); background: var(--field); max-width: 520px; margin: 0 auto; }
+.seg button { min-height: 42px; border: 0; border-radius: 11px; background: transparent; color: var(--ink2); font-size: 14px; font-weight: 600; padding: 0 14px; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+
 .grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
 .card {
   background: var(--card); border: 1px solid var(--edge); border-radius: var(--radius); padding: 16px; min-width: 0;
@@ -86,9 +99,9 @@ button:disabled { opacity: .35; cursor: default; }
 }
 .card h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--ink2); letter-spacing: .02em; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .card h2 .note { font-weight: 400; }
-.card[aria-busy="true"] > :not(h2) { opacity: .55; transition: opacity .2s; }
+[aria-busy="true"] > * { opacity: .55; transition: opacity .2s; }
 .hero .tag { position: absolute; top: 14px; left: 16px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin: 0; }
-.rings { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 196px; }
+.rings { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 160px; }
 /* Two rings side by side are wider than a small phone: let them shrink, keeping the ratio. */
 .rings svg { height: auto; min-width: 0; }
 .rings svg:first-child { max-width: 58%; }
@@ -97,38 +110,10 @@ button:disabled { opacity: .35; cursor: default; }
 .pill { padding: 6px 12px; border-radius: 999px; background: var(--line); }
 .pill.quiet { background: color-mix(in srgb, var(--warn) 22%, transparent); }
 .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; flex: none; }
-.empty { font-size: 13px; color: var(--ink2); margin: 0; display: grid; gap: 8px; justify-items: start; }
+.empty { font-size: 13px; color: var(--ink2); margin: 0; }
 
-/* the filter bar */
-.filters-card { display: grid; gap: 12px; }
-.presets { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px; }
-.presets button, .chip { flex: none; min-height: 38px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--edge); background: var(--field); color: var(--ink2); font-size: 13px; }
-.presets button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: transparent; }
-.stepper { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 6px; }
-.arrow { height: 44px; border-radius: 14px; border: 1px solid var(--edge); background: var(--field); display: grid; place-items: center; }
-.range-label { text-align: center; font-size: 14px; font-weight: 600; line-height: 1.3; }
-.range-label small { display: block; font-size: 12px; font-weight: 400; color: var(--ink2); }
-.timeline { height: 64px; touch-action: pan-y; }
-.timeline svg { cursor: pointer; display: block; overflow: visible; }
-.timeline .outside { fill: var(--bg); fill-opacity: .55; pointer-events: none; }
-.timeline .window { fill: var(--ink); fill-opacity: .08; stroke: var(--ink); stroke-opacity: .7; stroke-width: 1.5; cursor: grab; }
-.timeline .window.dragging { cursor: grabbing; }
-.timeline .handle { fill: var(--ink); cursor: ew-resize; }
-.hint { font-size: 11px; color: var(--ink2); display: flex; justify-content: space-between; gap: 8px; margin-top: 2px; }
-.custom { display: grid; gap: 10px; padding: 12px; border-radius: 16px; border: 1px solid var(--edge); background: var(--field); }
-.custom[hidden] { display: none; }
-.custom .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.custom label { display: grid; gap: 4px; font-size: 12px; color: var(--ink2); }
-.custom input { min-height: 40px; border-radius: 10px; border: 1px solid var(--edge); background: var(--bg); padding: 0 8px; font-size: 13px; color: var(--ink); min-width: 0; }
-.custom .row { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
-.custom .err { color: var(--err); font-size: 12px; margin-right: auto; }
-.primary { min-height: 40px; padding: 0 16px; border-radius: 12px; border: 0; background: var(--pm25); color: #fff; font-weight: 600; }
-.summary { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink2); flex-wrap: wrap; min-height: 32px; }
-.summary b { color: var(--ink); font-weight: 600; }
-.summary .error { color: var(--err); }
-.link { background: none; border: 0; color: var(--pm25); font-weight: 600; padding: 6px 4px; min-height: 32px; }
-
-/* the main chart */
+/* the chart */
+.main .chart-title { font-size: 15px; color: var(--ink); margin-bottom: 12px; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .toggles { display: flex; gap: 6px; }
 .toggles button { min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--edge); background: transparent; color: var(--ink2); font-size: 13px; display: inline-flex; align-items: center; }
@@ -140,52 +125,55 @@ button:disabled { opacity: .35; cursor: default; }
 .chart { position: relative; width: 100%; }
 .chart svg { display: block; overflow: visible; }
 .mainchart { height: 330px; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
-.mainchart.single { height: 220px; }
+.mainchart.single { height: 230px; }
 .mainchart .hit { cursor: crosshair; }
 .mainchart .selection { fill: var(--pm25); fill-opacity: .15; stroke: var(--pm25); stroke-opacity: .6; pointer-events: none; }
 .cursor { stroke: var(--ink2); stroke-width: 1; stroke-dasharray: 3 3; }
-.caption { font-size: 12px; color: var(--ink2); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 4px; align-items: center; }
-.check { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; cursor: pointer; }
-.check input { width: 18px; height: 18px; accent-color: var(--pm25); margin: 0; }
+.caption { font-size: 12px; color: var(--ink2); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 6px; align-items: center; min-height: 32px; }
+.caption .error { color: var(--err); }
+.link { background: none; border: 0; color: var(--pm25); font-weight: 600; font-size: 13px; padding: 6px 2px; min-height: 36px; }
+.link[hidden] { display: none; }
 .tip { position: absolute; pointer-events: none; opacity: 0; transform: translateY(-100%); padding: 6px 9px; border-radius: 8px; font-size: 12px; line-height: 1.4; white-space: nowrap; transition: opacity .12s; z-index: 3; background: var(--tip-bg); color: var(--tip-ink); box-shadow: 0 6px 18px rgba(0, 0, 0, .2); }
 .tip b { font-variant-numeric: tabular-nums; }
 .tip .range { opacity: .7; }
 
-/* above-limit periods */
-.episodes { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.episodes button { width: 100%; text-align: left; display: grid; grid-template-columns: 10px 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--edge); background: var(--field); min-height: 48px; }
-.episodes button:hover { border-color: var(--ink2); }
-.episodes .when { font-size: 13px; font-weight: 600; }
-.episodes .what { font-size: 12px; color: var(--ink2); }
-.episodes .go { font-size: 12px; color: var(--pm25); font-weight: 600; }
-.episodes .more { font-size: 12px; color: var(--ink2); padding: 2px 4px; }
+/* the three numbers */
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.stat { padding: 12px 8px; text-align: center; display: grid; gap: 2px; }
+.stat b { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--ink2); }
+.stats .empty { grid-column: 1 / -1; text-align: center; }
 
-/* levels and stats */
-.segbar { display: flex; height: 14px; border-radius: 999px; overflow: hidden; gap: 2px; background: var(--line); }
-.seglegend { display: grid; gap: 6px; margin-top: 12px; font-size: 13px; }
-.seglegend div { display: flex; justify-content: space-between; gap: 8px; }
-.seglegend span:last-child { color: var(--ink2); font-variant-numeric: tabular-nums; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
-th { text-align: right; font-weight: 400; color: var(--ink2); font-size: 11px; padding: 4px 4px 6px; border-bottom: 1px solid var(--line); }
-th:first-child, td:first-child { text-align: left; }
-td { text-align: right; padding: 8px 4px; border-bottom: 1px solid var(--line); }
-.hourpair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
-.hourpair div { border: 1px solid var(--edge); border-radius: 14px; padding: 10px; font-size: 12px; color: var(--ink2); }
-.hourpair b { display: block; color: var(--ink); font-size: 15px; }
+/* above the limit */
+.episodes { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.episodes li { display: grid; grid-template-columns: 4px 1fr; gap: 10px; font-size: 12px; color: var(--ink2); }
+.episodes li i { border-radius: 4px; }
+.episodes li b { display: block; font-size: 13px; color: var(--ink); }
+.episodes .more { display: block; padding-left: 14px; }
 
 .foot { margin-top: 18px; font-size: 12px; color: var(--ink2); text-align: center; }
 
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(46, 158, 107, .55); } 100% { box-shadow: 0 0 0 10px rgba(46, 158, 107, 0); } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
-@media (min-width: 860px) {
+/* Tablet and up: two columns, the chart beside the summary, and the period
+ * switch moves into the header. The chart grows with the space it gets. */
+@media (min-width: 900px) {
   .app { padding: 26px 28px 32px; }
+  .top { margin-bottom: 18px; }
+  .periods { position: static; padding: 0; background: none; border: 0; backdrop-filter: none; -webkit-backdrop-filter: none; flex: 0 1 380px; }
+  .seg button { min-height: 38px; }
   .grid {
-    grid-template-columns: 340px minmax(0, 1fr);
-    grid-template-areas: "hero filters" "episodes main" "levels main" "stats hours" "week week";
+    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+    grid-template-areas: "hero main" "stats main" "episodes main";
+    grid-template-rows: auto auto 1fr;
     align-items: start;
+    gap: 16px;
   }
-  .hero { grid-area: hero; } .filters-card { grid-area: filters; } .main { grid-area: main; }
-  .episodes-card { grid-area: episodes; } .levels { grid-area: levels; } .stats { grid-area: stats; }
-  .hours { grid-area: hours; } .week { grid-area: week; }
+  .hero { grid-area: hero; } .main { grid-area: main; } .stats { grid-area: stats; } .episodes-card { grid-area: episodes; }
+  .mainchart { height: clamp(380px, 52vh, 560px); }
+  .mainchart.single { height: clamp(300px, 40vh, 440px); }
+}
+@media (min-width: 1300px) {
+  .grid { grid-template-columns: 400px minmax(0, 1fr); }
 }
