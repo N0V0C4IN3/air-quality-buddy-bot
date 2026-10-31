@@ -11,9 +11,9 @@
 - Stores PM2.5 / PM10 in your DB
 - Telegram bot: latest reading, Today / 12h / 7d charts, subscribe/unsubscribe toggle
 - Charts stack PM2.5 and PM10 in their own panes, each shaded with its own warn/high bands
-- Inline buttons switch window in place; 7d is smoothed with the raw readings kept underneath
+- One inline menu under every card: Status, Today / 12h / 7d and Patterns switch the card in place, beside theme, subscribe and info; 7d is smoothed with the raw readings kept underneath
 - Patterns view: an hour-of-day heatmap showing *when* the air is worst
-- /status renders a card PNG: a level bar against that pollutant's own limits, an hour-long sparkline, the trend vs an hour ago, and a text notice when the sensor goes quiet
+- Status (/start, /status or the button) renders a card PNG: a level bar against that pollutant's own limits, an hour-long sparkline, the trend vs an hour ago, and a text notice when the sensor goes quiet
 - Per-chat light or dark charts
 - Optional alerts with cooldown, delivered as the same card PNG the status button sends
 - Web dashboard: any time frame (presets or a custom from/to), resolution from every
@@ -103,7 +103,7 @@ The Telegram bot sends PNGs, so it has no hover layer and no way to ask for
 `web-api` is a read-only FastAPI service over the same Postgres. It aggregates
 in SQL — ask for ninety days and you get bucketed means with each bucket's
 min/max spread behind them, not 26k points — and serves a small static page
-(vanilla JS + uPlot, no build step) from the same container.
+(vanilla JS drawing its own SVG, no build step and no chart library) from the same container.
 
 ```bash
 docker compose up --build db web-api -d
@@ -153,7 +153,7 @@ to listen on a public port:
 
 With `DASHBOARD_URL` set (HTTPS only — Telegram refuses anything else),
 reporter-bot puts a **Dashboard** button in the chat menu at startup and an
-**Open dashboard** button under every chart card.
+**Dashboard** button under every card.
 
 For a link in the bot's description, use a `t.me` deep link rather than the raw
 URL: a browser opening the site directly carries no `initData` and, under the

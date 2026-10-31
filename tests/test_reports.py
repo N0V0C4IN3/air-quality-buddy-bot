@@ -4,7 +4,9 @@ import pytest
 
 from common.air_quality import Level
 from common.db import ReadingRepository
-from reports import ReadingReports, Report, Window
+from reports import (
+    NO_READINGS, STATUS, VIEWS, ReadingReports, Report, Window, view_from_slug,
+)
 
 KYIV = timezone(timedelta(hours=3))  # fixed offset: no tz database needed
 PNG_MAGIC = bytes([0x89]) + b"PNG"
@@ -59,6 +61,19 @@ def test_window_slugs_round_trip():
     """Slugs travel in callback data on live buttons — they must survive."""
     for window in Window:
         assert Window.from_slug(window.slug) is window
+
+
+def test_every_view_slug_round_trips():
+    """Status rides in the same callback grammar as the windows."""
+    for view in VIEWS:
+        assert view_from_slug(view.slug) is view
+    assert STATUS.slug == "status"
+    assert len({v.slug for v in VIEWS}) == len(VIEWS)
+
+
+def test_an_unknown_slug_is_a_key_error():
+    with pytest.raises(KeyError):
+        view_from_slug("yesterday")
 
 
 def test_only_the_seven_day_window_is_smoothed():
@@ -127,9 +142,11 @@ def test_a_reading_just_before_local_midnight_belongs_to_yesterday(reports, db):
 
 # ---------- status block ----------
 
-def test_status_returns_none_without_readings(reports):
+def test_status_without_readings_is_an_empty_card(reports):
     assert reports.status() is None
-    assert reports.status_report() is None
+    report = reports.status_report()
+    assert report.is_empty
+    assert report.text == report.notice == NO_READINGS
 
 
 def test_status_uses_the_newest_reading(reports, db):
@@ -175,6 +192,38 @@ def test_a_quiet_sensor_is_reported_as_quiet(reports, db):
     assert report.is_empty                     # nothing to render for a dead reader
     assert "Sensor quiet" in report.text
     assert "2 h" in report.text
+
+
+def test_a_quiet_sensor_has_a_pop_up_notice(reports, db):
+    """Tapping Status on a chart cannot swap in text, so it is said in a pop-up:
+    plain text, inside Telegram's 200-character cap."""
+    add_reading(db, datetime(2026, 8, 27, 8, 0, tzinfo=timezone.utc), pm25=5.0)
+
+    notice = reports.status_report(now=datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)).notice
+
+    assert "Sensor quiet" in notice and "2 h" in notice
+    assert "<" not in notice
+    assert len(notice) <= 200
+
+
+def test_a_quiet_sensor_is_last_seen_in_local_time(reports, db):
+    """08:00 UTC is 11:00 in Kyiv: the user must see 11:00, on the card and in the pop-up."""
+    add_reading(db, datetime(2026, 8, 27, 8, 0, tzinfo=timezone.utc), pm25=5.0)
+
+    report = reports.status_report(now=datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc))
+
+    assert "11:00" in report.text and "11:00" in report.notice
+    assert "08:00" not in report.text + report.notice
+
+
+def test_for_view_covers_status_and_windows(reports):
+    assert reports.for_view(STATUS).text == NO_READINGS
+    assert reports.for_view(Window.TODAY).text == "No data for today."
+
+
+def test_an_empty_window_has_a_pop_up_notice(reports):
+    report = reports.for_window(Window.LAST_7D, now=datetime(2026, 8, 27, 12, 0, tzinfo=KYIV))
+    assert report.notice == "No data for last 7d."
 
 
 def test_a_fresh_reading_is_not_stale(reports, db):

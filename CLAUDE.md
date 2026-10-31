@@ -61,8 +61,11 @@ drift check on Postgres.
 - **Every table is a PNG.** Telegram has no table markup — the tag set is b/i/u/s/code/pre/a/blockquote — so a text table can only be a `<pre>` block, and `<b>` inside one renders in a wider monospace face that shifts the whole row. The window stats, the status card and the worst/best hour are all typeset into the image by `charts.py`; captions are one line. Keep new tabular output on that side of the seam.
 - **The status card is a chart too, and so is an alert.** `charts.status_card` draws the level bar (zero to that pollutant's *high* limit, warn marked), the sparkline and the trend; `reports.status_report()` and `reports.alert_report()` both return a `Report` like any window, with an empty `text` — both go out as the bare PNG, because the card already names the level and a caption only repeats it. Fan-out renders and uploads **once per theme** — Telegram returns a `file_id` for an uploaded photo and re-sending that id costs no bytes — so a hundred subscribers still cost two renders. Two paths stay text: a stale sensor (nothing to draw, and a dead reader must not wait on a render) and `reports.alert_text()`, the fallback when a render or send fails, because an alert must still arrive.
 - **PNGs have no colour emoji.** Matplotlib's bundled font renders the level circles as tofu, so the status card draws a coloured dot and always names the level in words, and `charts.trend_text` uses arrows rather than the coloured squares the text path uses.
-- **Inline button labels are width-budgeted.** Telegram divides a row equally and truncates whatever overflows, so `keyboard_layout.py` (no aiogram import, therefore testable) keeps the three time windows on short ASCII labels in one row and gives Patterns its own. Adding a fourth button to that row re-breaks it.
-- **Callback data is a wire format.** `callbacks.py` owns the `w:<slug>` / `theme:<slug>` grammar, deliberately free of any aiogram import so it stays testable. Changing a slug orphans every button already on someone's screen; Telegram caps the payload at 64 bytes.
+- **The inline keyboard is the whole menu.** There is no reply keyboard: every card (status, window, alert) carries the same buttons, and a view button edits the card in place. Status is a view beside the windows (`reports.STATUS`, a separate enum from `Window` because it has no range); `reports.View` is either and `ReadingReports.for_view` renders one. A card with nothing to draw is `Report.empty` and goes out as text with the buttons; tapping into a view with nothing to draw shows `Report.notice` as a pop-up and leaves the card alone, and tapping a chart on a text card sends a fresh photo, because a text message cannot be edited into one. Renders run on a one-worker thread pool (`bot.render`), off the event loop. The old reply-keyboard labels still have one handler, which removes that keyboard on first use. The info text is the one message that is not a card: it carries `keyboard_layout.info_rows` - Back deletes it (`x:back`, leaving the card it was opened from in view) and Status swaps it for a status card (`x:status`); past Telegram's 48-hour delete window only its buttons are removed.
+- **An alert is never edited.** Its buttons are `card_rows(None, …)`: no view is marked and a view tap opens a new card (`n:`), so the record of what tripped the threshold stays in the chat. Theme and subscribe taps on an alert only redraw its buttons.
+- **No `web_app` button outside private chats.** Telegram rejects the whole message, not just the button, so `bot.card_buttons` drops Dashboard for a negative (group/channel) chat id. On an alert that would otherwise mean no alert at all.
+- **Inline button labels are width-budgeted.** Telegram divides a row equally and truncates whatever overflows, so `keyboard_layout.card_rows` (no aiogram import, therefore testable; `markup.py` only translates it) keeps every row to three buttons at most and the tests hold each label to its share of `ROW_BUDGET`. Adding a fourth button to the time-window row re-breaks it.
+- **Callback data is a wire format.** `callbacks.py` owns `<action>:<slug>[:<arg>]` (documented there), deliberately free of any aiogram import so it stays testable. Settings buttons carry the state they set (`theme:<card>:dark`, `sub:<card>:off`), never "toggle": a label on an old card is frozen. Changing a slug orphans every button already on someone's screen, though `bot.button_handler` answers an undecodable one rather than leaving it spinning; Telegram caps the payload at 64 bytes.
 - **One `Database` per process.** Constructed once in `bot.py` / `main.py` and passed in; never build one inside a handler or a loop pass — that creates a fresh engine and pool each time.
 - **aiogram is pinned to 2.25.1** — decorator/`executor.start_polling` style, not the v3 Router API.
 - **Thresholds have one owner.** `common.air_quality.Thresholds` is built from env once per service and passed around; nothing else should read `PM25_WARN` and friends or re-implement the comparison.
@@ -94,9 +97,27 @@ drift check on Postgres.
   link cannot carry `initData`, which is why the bot description should point at a
   `t.me` deep link rather than the raw URL.
 - **The web palette mirrors `charts.py` exactly.** `web-api/static/styles.css` restates
-  the same hex values as CSS custom properties, and the amber/red band hues stay reserved
-  for threshold state. Change one side and change the other, or the Telegram card and the
-  web view stop looking like the same product.
+  the same series and threshold hex values as CSS custom properties, and the amber/red
+  hues stay reserved for threshold state. Change one side and change the other, or the
+  Telegram card and the web view stop looking like the same product. The frosted
+  surfaces (`--bg`, `--card`, the glows) are the dashboard's own.
+- **Static files are `no-cache`, and their URLs carry `?v=`.** Telegram's iOS web view
+  reuses an asset with no Cache-Control indefinitely, so a redesign once shipped as the
+  new `index.html` over the old `app.js` and `styles.css`. `RevalidatedStaticFiles` in
+  `web-api/api.py` makes every reuse a 304 check; the `?v=` on every `<link>`, `<script>`
+  and module import is for copies cached before that header existed - keep it identical
+  everywhere (a test holds it) or a module loads twice.
+- **The dashboard draws its own SVG.** No chart library and no build step:
+  `static/charts.js` draws the "Now" rings and the main chart; `static/clock.js` formats
+  every time in `meta.timezone` through Intl, never the browser's zone. Charts colour
+  themselves with `var(--…)`, so a theme switch is a CSS change, not a redraw.
+- **One column, one filter.** The page is the rings, the chart, three numbers and the
+  stretches above a limit. The period switch (24 hours / 7 days / 30 days) is the only
+  filter: a bar along the bottom of a phone, in the header from 900px, where the layout
+  becomes two columns. Anything finer is a drag across the chart, which zooms to an
+  explicit pair of instants; a tap reads a value and a double tap zooms out. Period, zoom,
+  detail and pollutants live in the URL. `/api/episodes` merges readings over a warn
+  limit into stretches, with gaps of up to two intervals bridged.
 - **`DASHBOARD_URL` must be HTTPS or absent.** Telegram refuses a `web_app` button with a
   plain-http URL, and that failure would take down every chart card, not just the button —
   so `reporter-bot/config.py` rejects it at boot and an unset value simply hides the button.

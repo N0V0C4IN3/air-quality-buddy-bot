@@ -1,61 +1,43 @@
-"""The keyboards.
+"""The keyboard as aiogram objects.
 
 `markup.py` is the one reporter-bot module the rest of the suite never reaches,
 because it is the only one that imports aiogram — and aiogram is not in
 requirements-dev.txt (2.25.1 predates the Python the suite is developed on).
 So these skip unless aiogram is installed, and CI covers the same ground for
-real by importing the module inside the built reporter-bot image.
+real by importing the module inside the built reporter-bot image. The plan
+itself is tested without aiogram in test_keyboard_layout.
 """
 import pytest
 
 pytest.importorskip("aiogram", reason="aiogram is a reporter-bot dependency, not a test one")
 
-from markup import main_menu_markup, window_markup  # noqa: E402
-from reports import Window  # noqa: E402
+from keyboard_layout import card_rows, info_rows  # noqa: E402
+from markup import card_markup, info_markup  # noqa: E402
+from reports import VIEWS  # noqa: E402
 
 DASH = "https://air-quality-pi.tail03af11.ts.net"
 
 
-def buttons(kb):
-    return [b for row in kb.inline_keyboard for b in row]
-
-
-def test_no_dashboard_url_means_no_dashboard_button():
-    """An unset DASHBOARD_URL must hide the button, not render a dead one."""
-    labels = [b.text for b in buttons(window_markup(Window.TODAY))]
-    assert not any("dashboard" in t.lower() for t in labels)
-
-
-def test_the_dashboard_button_appears_when_there_is_a_url():
-    kb = window_markup(Window.TODAY, dashboard_url=DASH)
-    dash = [b for b in buttons(kb) if "dashboard" in b.text.lower()]
-    assert len(dash) == 1
-    assert dash[0].web_app.url == DASH
-
-
-def test_the_dashboard_button_gets_its_own_row():
-    """The window row is width-budgeted to the pixel; a fourth button re-breaks it."""
-    kb = window_markup(Window.TODAY, dashboard_url=DASH)
-    last = kb.inline_keyboard[-1]
-    assert len(last) == 1
-    assert "dashboard" in last[0].text.lower()
-
-
-def test_the_window_buttons_are_unchanged_by_the_dashboard_url():
-    without = [b.text for b in buttons(window_markup(Window.LAST_7D))]
-    with_url = [b.text for b in buttons(window_markup(Window.LAST_7D, dashboard_url=DASH))]
-    assert with_url[:len(without)] == without
-
-
-@pytest.mark.parametrize("window", list(Window))
-def test_every_window_renders(window):
+@pytest.mark.parametrize("on", [*VIEWS, None])
+def test_the_markup_is_the_plan(on):
     for theme in ("light", "dark"):
-        kb = window_markup(window, theme=theme, dashboard_url=DASH)
-        assert buttons(kb)
+        kb = card_markup(on, theme=theme, subscribed=True, dashboard_url=DASH)
+        plan = card_rows(on, theme=theme, subscribed=True, dashboard_url=DASH)
+        assert [[b.text for b in row] for row in kb.inline_keyboard] == \
+            [[b.label for b in row] for row in plan]
 
 
-@pytest.mark.parametrize("subscribed", [True, False])
-def test_the_menu_names_the_action_not_the_state(subscribed):
-    labels = [b.text for row in main_menu_markup(subscribed).keyboard for b in row]
-    assert ("🔔 Unsubscribe" in labels) is subscribed
-    assert ("🔔 Subscribe" in labels) is not subscribed
+def test_callback_buttons_carry_their_data_and_the_dashboard_a_web_app():
+    kb = card_markup(None, dashboard_url=DASH)
+    for row in kb.inline_keyboard:
+        for b in row:
+            if "Dashboard" in b.text:
+                assert b.web_app.url == DASH and not b.callback_data
+            else:
+                assert b.callback_data and not b.web_app
+
+
+def test_the_info_markup_is_the_plan():
+    kb = info_markup()
+    assert [[(b.text, b.callback_data) for b in row] for row in kb.inline_keyboard] == \
+        [[(b.label, b.callback) for b in row] for row in info_rows()]

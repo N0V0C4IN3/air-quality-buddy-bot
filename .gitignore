@@ -213,10 +213,8 @@ __marimo__/
 # PNGs, dashboard screenshots and the web-api log.
 .run-out/
 
-# uPlot is vendored into the image by web-api/Dockerfile at build time; the
-# driver fetches the same version locally so the page has charts outside Docker.
-web-api/static/vendor/*
-!web-api/static/vendor/.gitkeep
-
 # /autoresearch session directory; the run itself lives on its autoresearch/* branch.
 .auto/
+
+# Design prototypes published as artifacts.
+artifacts/

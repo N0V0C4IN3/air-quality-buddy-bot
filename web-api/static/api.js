@@ -42,12 +42,12 @@ async function request(path, params, options = {}) {
   return res.json();
 }
 
-/* A range is either a preset name or an explicit pair; the server owns the
- * rules, so this just forwards whichever the UI is holding. */
+/* A range is either a preset name, which the server resolves against its own
+ * clock and timezone, or an explicit pair of instants. */
 function rangeParams(range) {
-  return range.custom
-    ? { from: range.from, to: range.to }
-    : { range: range.preset };
+  return range.preset
+    ? { range: range.preset }
+    : { from: new Date(range.from).toISOString(), to: new Date(range.to).toISOString() };
 }
 
 export const api = {
@@ -55,7 +55,7 @@ export const api = {
   latest: () => request("api/latest"),
   series: (range, bucket) => request("api/series", { ...rangeParams(range), bucket }),
   summary: (range) => request("api/summary", rangeParams(range)),
-  patterns: (range) => request("api/patterns", rangeParams(range)),
+  episodes: (range) => request("api/episodes", rangeParams(range)),
   setTheme: (theme) => request("api/theme", null, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -24,6 +24,22 @@ def test_today_starts_at_local_midnight_not_utc_midnight():
     assert r.start < NOW
 
 
+def test_yesterday_is_the_whole_previous_local_day():
+    r = parse_range(preset="yesterday", now=NOW, tz=KYIV)
+    start, end = r.start.astimezone(KYIV), r.end.astimezone(KYIV)
+    assert (start.day, start.hour, start.minute) == (13, 0, 0)
+    assert (end.day, end.hour, end.minute) == (14, 0, 0)
+    assert r.start.tzinfo is timezone.utc
+
+
+def test_yesterday_across_a_dst_change_is_a_calendar_day_not_24_hours():
+    """Kyiv springs forward on 29 March 2026: that local day is 23 hours long."""
+    r = parse_range(preset="yesterday", now=datetime(2026, 3, 30, 9, 0, tzinfo=timezone.utc), tz=KYIV)
+    assert r.start.astimezone(KYIV).day == 29
+    assert r.start.astimezone(KYIV).hour == 0
+    assert r.span_seconds == 23 * 3600
+
+
 def test_explicit_pair_wins_over_preset():
     r = parse_range(preset="7d", start="2026-03-01T00:00", end="2026-03-02T00:00",
                     now=NOW, tz=KYIV)

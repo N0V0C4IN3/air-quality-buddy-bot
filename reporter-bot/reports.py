@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from io import BytesIO
-from typing import Optional
+from typing import Optional, Union
 
 import pandas as pd
 
@@ -17,7 +17,11 @@ from common.air_quality import Level, Thresholds
 from common.db import Database, ReadingRepository
 
 from charts import hour_heatmap, palette_for, status_card, window_chart
-from html_helpers import format_caption, format_stale_card, relative_time
+from html_helpers import (
+    format_caption, format_stale_card, relative_time, stale_notice,
+)
+
+NO_READINGS = "No readings yet."
 
 # How many recent readings the /status sparkline draws.
 SPARK_POINTS = 12
@@ -107,10 +111,49 @@ class Window(Enum):
         return now - timedelta(days=7), now
 
 
+class Status(Enum):
+    """The latest-reading card: a view beside the windows, not a time range.
+
+    Its own enum rather than a fifth `Window` because it has no range, bucket
+    or smoothing, but it shares a window's `title`/`slug` shape so the card's
+    buttons and callback data can treat every view alike.
+    """
+    CARD = "Status"
+
+    @property
+    def title(self) -> str:
+        return self.value
+
+    @property
+    def slug(self) -> str:
+        return "status"
+
+
+STATUS = Status.CARD
+
+# What one chart card can show; its buttons swap between these in place.
+View = Union[Status, Window]
+VIEWS: tuple[View, ...] = (STATUS, *Window)
+_BY_SLUG = {v.slug: v for v in VIEWS}
+
+
+def view_from_slug(slug: str) -> View:
+    """Inverse of `.slug` over every view; KeyError on anything else."""
+    return _BY_SLUG[slug]
+
+
 @dataclass(frozen=True)
 class Report:
     text: str
     chart: Optional[BytesIO] = None
+    # Plain text for a pop-up when there is no chart to swap in: a callback
+    # answer renders no HTML and holds 200 characters.
+    notice: str = ""
+
+    @classmethod
+    def empty(cls, text: str, notice: str = "") -> "Report":
+        """Nothing to draw. `notice` defaults to `text`, which suits plain text."""
+        return cls(text=text, notice=notice or text)
 
     @property
     def is_empty(self) -> bool:
@@ -171,19 +214,23 @@ class ReadingReports:
         )
 
     def status_report(self, *, now: Optional[datetime] = None,
-                      theme: str = "light") -> Optional[Report]:
+                      theme: str = "light") -> Report:
         """The latest reading as a card PNG.
 
         A quiet sensor stays text: a dead reader must not have to wait on a
-        render, and there is nothing to draw.
+        render, and there is nothing to draw. So does an empty database.
         """
         now = now or datetime.now(timezone.utc)
         view = self.status(now=now)
         if view is None:
-            return None
+            return Report.empty(NO_READINGS)
         if view.is_stale(now):
-            return Report(text=format_stale_card(view.observed_at,
-                                                 view.expected_every, now))
+            # Shown in the configured timezone, like every other time a user sees.
+            seen = view.observed_at.astimezone(self._tz)
+            return Report.empty(
+                format_stale_card(seen, view.expected_every, now),
+                notice=stale_notice(seen, view.expected_every, now),
+            )
 
         chart = status_card(
             pm25=view.pm25,
@@ -249,6 +296,12 @@ class ReadingReports:
             pm25, pm10, ts_utc, level=self._thresholds.level(pm25, pm10), tz=self._tz
         )
 
+    def for_view(self, view: View, *, theme: str = "light") -> Report:
+        """Whatever a card showing `view` should carry, as of now."""
+        if view is STATUS:
+            return self.status_report(theme=theme)
+        return self.for_window(view, theme=theme)
+
     # ---------- windows ----------
 
     def for_window(self, window: Window, *, now: Optional[datetime] = None,
@@ -257,7 +310,7 @@ class ReadingReports:
         df = self._frame(start, end, floor_seconds=window.bucket_floor_seconds)
 
         if df.empty:
-            return Report(text=f"No data for {window.title.lower()}.")
+            return Report.empty(f"No data for {window.title.lower()}.")
 
         # The caption counts readings, not plotted points - "672 samples" for a
         # week of 30-second data would be a lie about how much was measured.
