@@ -1,59 +1,37 @@
-"""Keyboards.
+"""The inline keyboard attached to every card, as aiogram objects.
 
-Two kinds: the persistent reply keyboard at the bottom of the chat, and the
-inline keyboard attached to a chart card so switching windows edits that card in
-place instead of appending another pair of messages.
-
-What the buttons say and how the rows divide lives in `keyboard_layout`, which
-carries no aiogram import so it can be tested.
+The plan - labels, actions, rows - is `keyboard_layout.card_rows`, which
+carries no aiogram import so it can be tested; this only translates it.
 """
 from __future__ import annotations
 
-from aiogram.types import (
-    InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup,
-    WebAppInfo,
-)
+from typing import Optional
 
-from callbacks import theme_action, window_action
-from keyboard_layout import theme_label, window_rows
-from reports import Window
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+
+from keyboard_layout import Button, card_rows, info_rows
+from reports import View
 
 
-def main_menu_markup(subscribed: bool) -> ReplyKeyboardMarkup:
-    sub_text = "🔔 Unsubscribe" if subscribed else "🔔 Subscribe"
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(
-        KeyboardButton("📟 Status"),
-    )
-    kb.row(
-        KeyboardButton("📅 Today"),
-        KeyboardButton("🕒 Last 12h"),
-        KeyboardButton("📈 Last 7d"),
-    )
-    kb.add(KeyboardButton("🗓 Patterns"))
-    kb.add(KeyboardButton(sub_text))
-    kb.add(KeyboardButton("ℹ️ Info"))
+def _button(b: Button) -> InlineKeyboardButton:
+    if b.web_app_url:
+        return InlineKeyboardButton(b.label, web_app=WebAppInfo(url=b.web_app_url))
+    return InlineKeyboardButton(b.label, callback_data=b.callback)
+
+
+def _markup(rows) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    for row in rows:
+        kb.row(*[_button(b) for b in row])
     return kb
 
 
-def window_markup(active: Window, *, theme: str = "light",
-                  dashboard_url: str = "") -> InlineKeyboardMarkup:
-    """Buttons under a chart card. The active window is marked, not hidden.
+def info_markup() -> InlineKeyboardMarkup:
+    return _markup(info_rows())
 
-    The dashboard button, when there is a URL to point at, gets its own row:
-    it is the escape hatch from a PNG to a view you can hover and zoom, and
-    the window row is already width-budgeted to the pixel.
-    """
-    kb = InlineKeyboardMarkup(row_width=3)
-    for row in window_rows(active):
-        kb.row(*[
-            InlineKeyboardButton(label, callback_data=window_action(window))
-            for window, label in row
-        ])
-    kb.add(
-        InlineKeyboardButton(theme_label(theme), callback_data=theme_action(active))
-    )
-    if dashboard_url:
-        kb.add(InlineKeyboardButton("📊 Open dashboard",
-                                    web_app=WebAppInfo(url=dashboard_url)))
-    return kb
+
+def card_markup(on: Optional[View], *, theme: str = "light", subscribed: bool = False,
+                dashboard_url: str = "") -> InlineKeyboardMarkup:
+    """Buttons under a card showing `on`; None for an alert."""
+    return _markup(card_rows(on, theme=theme, subscribed=subscribed,
+                             dashboard_url=dashboard_url))

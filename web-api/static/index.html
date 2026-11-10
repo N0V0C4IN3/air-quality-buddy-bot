@@ -4,66 +4,63 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Air Quality</title>
-  <link rel="stylesheet" href="vendor/uPlot.min.css">
-  <link rel="stylesheet" href="styles.css">
+  <!-- The ?v= busts copies a client cached before the server sent
+       Cache-Control. Bump it, and the one on every import, when a file changes shape. -->
+  <link rel="stylesheet" href="styles.css?v=3">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="vendor/uPlot.iife.min.js"></script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="dot" id="live-dot" aria-hidden="true"></span>
-      <h1>Air Quality</h1>
-    </div>
-    <div class="topbar-actions">
-      <button id="customize-btn" class="ghost" aria-expanded="false">Panels</button>
-      <button id="theme-btn" class="ghost" title="Toggle light / dark">Theme</button>
-    </div>
-  </header>
+  <div class="glow g1" aria-hidden="true"></div>
+  <div class="glow g2" aria-hidden="true"></div>
 
-  <nav class="rangebar" aria-label="Time frame">
-    <div class="presets" id="presets" role="group" aria-label="Preset ranges"></div>
-    <div class="custom">
-      <label>From <input type="datetime-local" id="from"></label>
-      <label>To <input type="datetime-local" id="to"></label>
-      <button id="apply-custom">Apply</button>
-      <label class="bucket">Resolution
-        <select id="bucket">
-          <option value="">Auto</option>
-          <option value="raw">Every reading</option>
-          <option value="5m">5 minutes</option>
-          <option value="15m">15 minutes</option>
-          <option value="1h">Hourly</option>
-          <option value="6h">6 hours</option>
-          <option value="1d">Daily</option>
-        </select>
-      </label>
-    </div>
-  </nav>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="live" id="live-dot" aria-hidden="true"></span>
+        <h1>Air Quality</h1>
+      </div>
+      <!-- On a phone this is the bar along the bottom of the screen, where the
+           thumb is; from 900px it sits here in the header. -->
+      <nav class="periods" aria-label="Period">
+        <div class="seg" id="periods" role="group" aria-label="Period"></div>
+      </nav>
+      <div class="top-actions">
+        <span class="updated" id="updated"></span>
+        <button type="button" class="icon" id="theme-btn" aria-label="Switch to dark theme"></button>
+      </div>
+    </header>
 
-  <section id="customize" class="customize" hidden>
-    <p class="hint">Choose what this dashboard shows. Your layout is remembered in this browser.</p>
-    <div id="panel-toggles" class="toggles"></div>
-  </section>
+    <main class="grid">
+      <section class="card hero" aria-labelledby="now-title">
+        <h2 class="tag" id="now-title">Now</h2>
+        <div class="rings" id="rings"></div>
+        <div class="meta" id="now-meta"></div>
+      </section>
 
-  <p id="status-line" class="status-line" role="status"></p>
+      <section class="card main" aria-labelledby="chart-title">
+        <h2 class="chart-title" id="chart-title"></h2>
+        <div class="controls">
+          <div class="toggles" id="pollutants" role="group" aria-label="Pollutants"></div>
+          <div class="detail" id="detail" role="group" aria-label="Detail"></div>
+        </div>
+        <div class="chart mainchart" id="chart"></div>
+        <div class="caption">
+          <span id="bucket-caption"></span>
+          <button type="button" class="link" id="zoom-out" hidden>Zoom out</button>
+        </div>
+      </section>
 
-  <main id="panels"></main>
+      <section class="stats" id="stats" aria-label="Summary of the period"></section>
 
-  <template id="tpl-panel">
-    <section class="panel">
-      <header class="panel-head">
-        <h2></h2>
-        <span class="panel-note"></span>
-      </header>
-      <div class="panel-body"></div>
-    </section>
-  </template>
+      <section class="card episodes-card" aria-labelledby="eps-title">
+        <h2 id="eps-title"><span>Above the limit</span><span class="note" id="eps-count"></span></h2>
+        <div id="episodes"></div>
+      </section>
+    </main>
 
-  <footer class="foot">
-    <span id="foot-meta"></span>
-  </footer>
+    <footer class="foot" id="foot"></footer>
+  </div>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=3"></script>
 </body>
 </html>

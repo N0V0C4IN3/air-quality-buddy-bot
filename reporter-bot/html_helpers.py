@@ -54,6 +54,21 @@ def format_stale_card(observed_at: datetime, expected_every: int,
     )
 
 
+def stale_notice(observed_at: datetime, expected_every: int,
+                 now: datetime | None = None) -> str:
+    """The stale card as a pop-up: plain text, because a callback answer
+    renders no HTML, and short, because Telegram caps it at 200 characters.
+
+    Tapping Status on a chart card cannot turn the photo into the text card,
+    so the quiet sensor is reported over the card instead of replacing it.
+    """
+    now = now or datetime.now(timezone.utc)
+    quiet = relative_time(observed_at, now).replace(" ago", "")
+    return (f"⚠️ Sensor quiet: no readings for {quiet} "
+            f"(last seen {observed_at.strftime('%H:%M')}, "
+            f"expected every {expected_every // 60} min).")
+
+
 def format_caption(title: str, count: int) -> str:
     """Chart caption — one line; the numbers are typeset into the PNG.
 

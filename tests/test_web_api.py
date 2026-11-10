@@ -151,7 +151,7 @@ def test_health_needs_no_credential(client):
 
 def test_every_data_route_is_guarded(client):
     for path in ("/api/meta", "/api/latest", "/api/series", "/api/summary",
-                 "/api/patterns"):
+                 "/api/patterns", "/api/episodes"):
         assert client.get(path).status_code == 401, path
 
 
@@ -212,6 +212,53 @@ def test_patterns_grids_by_local_hour(client):
     assert by_hour[3] == 10.0
 
 
+# ---------- the timeline and above-limit periods ----------
+
+def test_exceedances_leave_the_database_and_nothing_else(seeded, thresholds):
+    with seeded.session() as s:
+        rows = ReadingRepository(s).get_exceedances(
+            start=START, end=START + timedelta(days=2),
+            pm25_warn=thresholds.pm25_warn, pm10_warn=thresholds.pm10_warn,
+        )
+    assert len(rows) == 2 * 4 * 12                # 14:00-18:00 local, both days
+    assert all(pm25 >= thresholds.pm25_warn or pm10 >= thresholds.pm10_warn
+               for _, pm25, pm10 in rows)
+
+
+def test_episodes_are_the_afternoons_newest_first(client):
+    body = client.get("/api/episodes", params=window(), headers=auth()).json()
+    assert body["count"] == 2
+    newest, oldest = body["episodes"]
+    assert newest["from"] > oldest["from"]
+    start = datetime.fromisoformat(oldest["from"]).astimezone(KYIV)
+    end = datetime.fromisoformat(oldest["to"]).astimezone(KYIV)
+    assert (start.hour, start.minute, end.hour, end.minute) == (14, 0, 18, 0)
+    assert oldest["readings"] == 48
+    assert oldest["level"] == "warn" and oldest["level_label"] == "Elevated"
+    assert (oldest["pm25_peak"], oldest["pm10_peak"]) == (40.0, 60.0)
+    # 60/50 is further over its limit than 40/35.
+    assert oldest["pollutant"] == "pm10"
+
+
+def test_one_clean_reading_does_not_split_an_episode(db, thresholds):
+    with db.session() as s:
+        repo = ReadingRepository(s)
+        for i, pm25 in enumerate([40, 41, 10, 42, 43, 10, 10, 10, 44]):
+            repo.add(pm25=pm25, pm10=20, timestamp=START + timedelta(seconds=i * INTERVAL))
+    svc = DashboardService(db, KYIV, thresholds, reading_interval_seconds=INTERVAL)
+    from ranges import TimeRange
+    eps = svc.episodes(TimeRange(START, START + timedelta(hours=1), "custom"))["episodes"]
+    # 40 41 . 42 43 is one stretch; three clean readings end it; 44 is another.
+    assert [e["readings"] for e in eps] == [1, 4]
+    assert eps[1]["pm25_peak"] == 43.0
+
+
+def test_a_range_with_nothing_over_the_limit_has_no_episodes(client):
+    body = client.get("/api/episodes", params={"from": START.isoformat(),
+                      "to": (START + timedelta(hours=6)).isoformat()}, headers=auth()).json()
+    assert body == {**body, "count": 0, "episodes": []}
+
+
 def test_a_bad_range_is_a_400_not_a_500(client):
     r = client.get("/api/series", params={"range": "forever"}, headers=auth())
     assert r.status_code == 400
@@ -262,3 +309,30 @@ def test_a_browser_visitor_has_nowhere_to_store_a_theme(service):
     r = TestClient(app).post("/api/theme", params={"token": "s3cret"},
                              json={"theme": "dark"})
     assert r.status_code == 403
+
+
+# ---------- the page itself ----------
+
+STATIC = __import__("pathlib").Path(__file__).resolve().parents[1] / "web-api" / "static"
+
+
+def test_static_files_must_be_revalidated_not_reused_on_a_guess(service):
+    """Without Cache-Control, Telegram's iOS web view kept a weeks-old app.js and
+    styles.css under a new index.html: the redesign shipped unstyled."""
+    app = create_app(service=service, guard=AccessGuard(AuthMode.PUBLIC, bot_token=TOKEN),
+                     tz=KYIV, static_dir=str(STATIC))
+    c = TestClient(app)
+    for path in ("/", "/app.js?v=2", "/charts.js", "/styles.css"):
+        r = c.get(path)
+        assert r.status_code == 200, path
+        assert r.headers["cache-control"] == "no-cache", path
+
+
+def test_every_local_asset_url_carries_the_same_version():
+    """One version everywhere: a module imported under two URLs loads twice."""
+    import re
+    refs = re.findall(r'(?:href|src)="([\w./]+\.(?:css|js)[^"]*)"', (STATIC / "index.html").read_text("utf-8"))
+    for js in STATIC.glob("*.js"):
+        refs += re.findall(r'from "\./([^"]+)"', js.read_text("utf-8"))
+    versions = {r.partition("?")[2] for r in refs}
+    assert refs and len(versions) == 1 and versions != {""}, refs

@@ -1,23 +1,74 @@
 # Air Quality + Telegram Bot Services
+
+An SDS011 particulate sensor on a Raspberry Pi, a Telegram bot that reports and alerts
+on it, and a dashboard that opens inside Telegram.
+
+![The dashboard on a desktop: current PM2.5 and PM10 gauges, the last 7 days as two charts with warn and high limits, and the periods that went above a limit](media/dashboard-desktop.png)
+
+## How it works
+
+```mermaid
+flowchart LR
+    S["SDS011 sensor"] -->|"serial: wake, warm up,<br/>read, sleep"| R["sensor-reader"]
+    R -->|"one row per reading"| DB[("Postgres<br/>readings, chats")]
+    R --> G{"level not ok?<br/>cooldown passed<br/>or got worse?"}
+    G -->|"alerts.warn / alerts.err"| MQ[["RabbitMQ"]]
+    MQ --> B["reporter-bot"]
+    DB --> B
+    B <-->|"subscribers"| C[("Redis")]
+    B -->|"cards and alerts as PNG,<br/>one inline menu"| T(("Telegram"))
+    DB --> W["web-api"]
+    W -->|"Mini App dashboard"| T
+    H["housekeeper"] -->|"prune old rows"| DB
+```
+
+Every reading gets a level from one set of thresholds, per pollutant, shared by the bot,
+the alerts and the dashboard:
+
+| Level | PM2.5 (µg/m³) | PM10 (µg/m³) |
+| --- | --- | --- |
+| Good | below 35 | below 50 |
+| Elevated | 35 – 75 | 50 – 100 |
+| High | 75 and up | 100 and up |
+
+The limits are the `PM25_WARN` / `PM25_ERR` / `PM10_WARN` / `PM10_ERR` settings below. An
+alert goes out when a reading is not good; the same level again stays quiet for
+`ALERT_COOLDOWN_SECONDS`, getting worse always gets through, and a good reading rearms it.
+
+## In Telegram
+
+Everything the bot sends is an image, because Telegram messages cannot carry colour or
+tables. Each one has the same inline menu under it: Status, Patterns, Today / 12h / 7d,
+light or dark charts, alerts on or off, info and the dashboard. A tap redraws the message
+in place.
+
+| Status | Alert |
+| --- | --- |
+| ![Status card: PM2.5 and PM10 against their warn and high limits, the trend against an hour ago and a sparkline of the last hour](media/bot-status.png) | ![Alert card in the dark theme: both pollutants high, in red, up several hundred percent on an hour ago](media/bot-alert.png) |
+| **Last 7 days** | **Patterns** |
+| ![Seven-day chart: PM2.5 and PM10 in separate panes, each over its own warn and high bands, with min, average, max and peak below](media/bot-last-7d.png) | ![Heatmap of PM2.5 by hour of day for each day, with the worst and best hour](media/bot-patterns.png) |
+
 ### Service Description
 * **sensor-reader** service reads the SDS011 sensor's data (PM2.5 and PM10) writes it to db.
 * **reporter-bot** service fetches the reports from db (Today, Last 12h, Last 7d).
 * **housekeeper** cleans the db
-* **web-api** serves a web dashboard: the same readings with a time frame you pick,
-  interactive charts and a layout you choose. Opens as a Telegram Mini App.
+* **web-api** serves a web dashboard over the same readings: the current level,
+  an interactive chart for the last 24 hours, 7 days or 30 days, and every stretch
+  above a limit. Opens as a Telegram Mini App.
 
 ### Features:
 - Wake → warm up → read → sleep cycle per sample (protects sensor + saves power)
 - Stores PM2.5 / PM10 in your DB
 - Telegram bot: latest reading, Today / 12h / 7d charts, subscribe/unsubscribe toggle
 - Charts stack PM2.5 and PM10 in their own panes, each shaded with its own warn/high bands
-- Inline buttons switch window in place; 7d is smoothed with the raw readings kept underneath
+- One inline menu under every card: Status, Today / 12h / 7d and Patterns switch the card in place, beside theme, subscribe and info; 7d is smoothed with the raw readings kept underneath
 - Patterns view: an hour-of-day heatmap showing *when* the air is worst
-- /status renders a card PNG: a level bar against that pollutant's own limits, an hour-long sparkline, the trend vs an hour ago, and a text notice when the sensor goes quiet
+- Status (/start, /status or the button) renders a card PNG: a level bar against that pollutant's own limits, an hour-long sparkline, the trend vs an hour ago, and a text notice when the sensor goes quiet
 - Per-chat light or dark charts
 - Optional alerts with cooldown, delivered as the same card PNG the status button sends
-- Web dashboard: any time frame (presets or a custom from/to), resolution from every
-  reading up to daily means, panels you turn on and off, hover values and a linkable URL
+- Web dashboard: 24 hours / 7 days / 30 days, drag across the chart to zoom in,
+  tap or hover to read a value, resolution from every reading up to daily means,
+  and a linkable URL
 - Housekeeper to prune old data
 - Timezone-aware charts
 
@@ -100,10 +151,19 @@ SDS011_PERSIST_CFG=false      # true = write ACTIVE/period to EEPROM
 The Telegram bot sends PNGs, so it has no hover layer and no way to ask for
 "last Tuesday afternoon". The dashboard is where that lives.
 
+On a phone it is one column with the period switch along the bottom of the screen,
+where the thumb is; from 900px wide the chart moves beside the summary and the switch
+into the header. The chart is two panes, one per pollutant, because one y-axis cannot
+carry two different limits honestly. Each point is a bucket average with its lowest to
+highest reading as a faint band behind it, and anything above a limit is shaded. Drag
+across it to zoom in; tap a point to read it.
+
+<p align="center"><img width="300" src="media/dashboard-phone.png" alt="The dashboard on a phone in the dark theme: the gauges, the 7-day chart, the three numbers and the period switch along the bottom of the screen"></p>
+
 `web-api` is a read-only FastAPI service over the same Postgres. It aggregates
 in SQL — ask for ninety days and you get bucketed means with each bucket's
 min/max spread behind them, not 26k points — and serves a small static page
-(vanilla JS + uPlot, no build step) from the same container.
+(vanilla JS drawing its own SVG, no build step and no chart library) from the same container.
 
 ```bash
 docker compose up --build db web-api -d
@@ -120,9 +180,10 @@ docker compose up --build db web-api -d
 | `GET /api/series` | bucketed PM2.5/PM10 for a range, columnar |
 | `GET /api/summary` | avg/min/max, share of time per level, worst and best hour |
 | `GET /api/patterns` | weekday x hour grid and the hour-of-day profile |
+| `GET /api/episodes` | the stretches above a warn limit, newest first, with level and peak |
 | `POST /api/theme` | store light/dark on the viewer's chat row |
 
-Every data route takes either `range=<1h|12h|today|24h|7d|30d|90d>` or an
+Every data route takes either `range=<1h|12h|today|yesterday|24h|7d|30d|90d>` or an
 explicit `from=` / `to=` ISO 8601 pair, plus an optional
 `bucket=<raw|5m|15m|1h|6h|1d>`. A bucket that would blow the point budget is
 widened rather than served.
@@ -153,7 +214,7 @@ to listen on a public port:
 
 With `DASHBOARD_URL` set (HTTPS only — Telegram refuses anything else),
 reporter-bot puts a **Dashboard** button in the chat menu at startup and an
-**Open dashboard** button under every chart card.
+**Dashboard** button under every card.
 
 For a link in the bot's description, use a `t.me` deep link rather than the raw
 URL: a browser opening the site directly carries no `initData` and, under the
