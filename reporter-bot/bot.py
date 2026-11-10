@@ -247,6 +247,7 @@ async def _on_view(call: types.CallbackQuery, cb: callbacks.Callback) -> None:
 
 
 async def _on_new_card(call: types.CallbackQuery, cb: callbacks.Callback) -> None:
+    # Only alerts sent before taps on them started editing still carry n:.
     await call.answer()
     await send_card(call.message.chat.id, cb.view)
 
@@ -330,8 +331,8 @@ async def button_handler(call: types.CallbackQuery):
 # =======================
 
 def alert_buttons(chat_id: int, theme: str):
-    """The card's buttons, in their alert form: no view is marked, and a view
-    tap opens a new card, so the alert stays what it was when it arrived.
+    """The card's buttons, in their alert form: no view is marked, since an
+    alert is not a view. A view tap edits the alert like any other card.
 
     Every recipient is a subscriber, so the state is known without asking the
     cache once per chat.

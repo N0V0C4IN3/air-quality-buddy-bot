@@ -80,11 +80,11 @@ def card_rows(on: Optional[View], *, theme: str, subscribed: bool,
               dashboard_url: str = "") -> list[list[Button]]:
     """Every row under a card showing `on`; None means the card is an alert.
 
-    On an alert no view is marked, and the view buttons open a new card rather
-    than editing: the alert has to stay what it was when it arrived.
+    On an alert no view is marked, because an alert is not a view; a view tap
+    edits it like any other card.
     """
     def view(v: View) -> Button:
-        return Button(button_label(v, on), view_action(v, new_card=on is None))
+        return Button(button_label(v, on), view_action(v))
 
     time_windows = [w for w in Window if w is not Window.PATTERNS]
     last = [Button(INFO_LABEL, info_action(on))]

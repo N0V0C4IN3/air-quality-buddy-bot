@@ -15,7 +15,6 @@ CARDS = [*VIEWS, None]   # None: the tapped card is an alert
 def every_action():
     for view in VIEWS:
         yield view_action(view)
-        yield view_action(view, new_card=True)
         yield dismiss_action(view)
     yield dismiss_action()
     for on in CARDS:
@@ -29,7 +28,8 @@ def every_action():
 def test_view_actions_round_trip():
     for view in VIEWS:
         assert decode(view_action(view)) == Callback(WINDOW, view)
-        assert decode(view_action(view, new_card=True)) == Callback(NEW_CARD, view)
+        # Alerts sent before 2026-11 carry n:, and those buttons still work.
+        assert decode(f"n:{view.slug}") == Callback(NEW_CARD, view)
 
 
 @pytest.mark.parametrize("on", CARDS)
@@ -56,7 +56,6 @@ def test_the_wire_format_is_the_documented_one():
     """Changing these strings orphans every button already on someone's screen."""
     assert view_action(Window.LAST_12H) == "w:last_12h"
     assert view_action(STATUS) == "w:status"
-    assert view_action(Window.TODAY, new_card=True) == "n:today"
     assert theme_action(Window.PATTERNS, "dark") == "theme:patterns:dark"
     assert subscribe_action(None, False) == f"sub:{ALERT}:off"
     assert info_action(Window.TODAY) == "info:today"

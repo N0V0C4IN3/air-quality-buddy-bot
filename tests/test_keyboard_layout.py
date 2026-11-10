@@ -63,7 +63,7 @@ def test_an_alert_carries_the_whole_menu():
         ["🌙 Dark mode", "🔕 Unsubscribe"],
         ["ℹ️ Info", "📊 Dashboard"],
     ]
-    assert decode(rows[0][0].callback) == decode(f"{NEW_CARD}:status")
+    assert decode(rows[0][0].callback) == decode(f"{WINDOW}:status")
 
 
 def test_no_row_holds_more_than_three_buttons():
@@ -97,11 +97,12 @@ def test_exactly_the_active_view_is_marked():
         assert marked == ([] if on is None else [on])
 
 
-def test_view_buttons_edit_a_card_but_open_a_new_one_from_an_alert():
-    """An alert must stay what it was when it arrived."""
+def test_view_buttons_edit_the_card_they_are_on_even_an_alert():
+    """Status on an alert turns that message into the status card; it does not
+    leave the alert behind and send another."""
     for on, rows in plans():
         actions = {decode(b.callback).action for b in view_buttons(rows).values()}
-        assert actions == ({NEW_CARD} if on is None else {WINDOW})
+        assert actions == {WINDOW}, on
 
 
 @pytest.mark.parametrize("on", CARDS)

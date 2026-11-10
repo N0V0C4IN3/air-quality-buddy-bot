@@ -7,8 +7,9 @@ stable and be testable without aiogram.
     <action>:<slug>[:<arg>]
 
     w:<view>                   show that view by editing this card
-    n:<view>                   show that view as a new card (taps on an alert:
-                               the alert itself is never overwritten)
+    n:<view>                   show that view as a new card. Alerts carried
+                               these until 2026-11, when a tap on an alert
+                               started editing it; no longer sent, still decoded
     theme:<card>:light|dark    set the chart theme, redraw this card
     sub:<card>:on|off          set alerts, redraw this card's buttons
     info:<card>                send the info text; the card stays as it is
@@ -75,8 +76,8 @@ def _card(on: Optional[View]) -> str:
     return on.slug if on is not None else ALERT
 
 
-def view_action(view: View, *, new_card: bool = False) -> str:
-    return _encode(NEW_CARD if new_card else WINDOW, view.slug)
+def view_action(view: View) -> str:
+    return _encode(WINDOW, view.slug)
 
 
 def theme_action(on: Optional[View], theme: str) -> str:
